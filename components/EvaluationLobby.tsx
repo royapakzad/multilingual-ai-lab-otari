@@ -6,13 +6,12 @@ import LoadingSpinner from './LoadingSpinner';
 interface EvaluationLobbyProps {
   currentUser: User;
   onEnter: (evaluationName: string) => void;
-  onLogout: () => void;
-  onChangePassword?: () => void;
-  onOpenAccessRequests?: () => void;
-  onOpenPartnerOrgs?: () => void;
 }
 
-const EvaluationLobby: React.FC<EvaluationLobbyProps> = ({ currentUser, onEnter, onLogout, onChangePassword, onOpenAccessRequests, onOpenPartnerOrgs }) => {
+const formatDate = (iso: string) =>
+  new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
+const EvaluationLobby: React.FC<EvaluationLobbyProps> = ({ currentUser, onEnter }) => {
   const [newName, setNewName] = useState('');
   const [existingNames, setExistingNames] = useState<{ name: string; count: number; lastUsed: string; ids: string[] }[]>([]);
   const [unnamed, setUnnamed] = useState<{ ids: string[]; count: number; lastUsed: string } | null>(null);
@@ -141,53 +140,19 @@ const EvaluationLobby: React.FC<EvaluationLobbyProps> = ({ currentUser, onEnter,
     }
   };
 
-  return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <header className="border-b border-border px-6 py-4 flex items-center justify-between">
-        <span className="font-bold text-lg text-primary">LLM Evaluation Labs</span>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-muted-foreground">{currentUser.email}</span>
-          {currentUser.role === 'admin' && onOpenAccessRequests && (
-            <button
-              onClick={onOpenAccessRequests}
-              className="text-sm text-primary hover:underline transition-colors"
-            >
-              Access Requests
-            </button>
-          )}
-          {currentUser.role === 'admin' && onOpenPartnerOrgs && (
-            <button
-              onClick={onOpenPartnerOrgs}
-              className="text-sm text-primary hover:underline transition-colors"
-            >
-              Partner Orgs
-            </button>
-          )}
-          {onChangePassword && (
-            <button
-              onClick={onChangePassword}
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Change Password
-            </button>
-          )}
-          <button
-            onClick={onLogout}
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Sign out
-          </button>
-        </div>
-      </header>
+  const hasExisting = existingNames.length > 0 || !!unnamed;
 
-      <main className="flex-grow flex items-start justify-center px-4 pt-16 pb-20">
-        <div className="w-full max-w-xl">
-          <div className="text-center mb-10">
-            <h1 className="text-3xl font-bold text-foreground tracking-tight">
-              {existingNames.length > 0 || unnamed ? 'Welcome back' : 'Welcome'}
+  return (
+      <main className="flex-grow px-4 pt-14 sm:pt-20 pb-24">
+        <div className="w-full max-w-xl mx-auto">
+          <div className="mb-10">
+            <h1 className="text-[28px] sm:text-3xl font-semibold text-foreground tracking-tight">
+              {hasExisting ? 'Welcome back' : 'Welcome'}
             </h1>
-            <p className="text-muted-foreground mt-2 text-base">
-              Give your evaluation a name to keep results organized and separate.
+            <p className="text-muted-foreground mt-2 text-[15px] leading-relaxed">
+              {hasExisting
+                ? 'Pick up where you left off, or start a new evaluation.'
+                : 'Start by naming your evaluation. Its scenarios, criteria and results are kept together under that name.'}
             </p>
           </div>
 
@@ -196,8 +161,8 @@ const EvaluationLobby: React.FC<EvaluationLobbyProps> = ({ currentUser, onEnter,
             <div className="flex justify-center py-8"><LoadingSpinner size="md" /></div>
           ) : existingNames.length > 0 || unnamed ? (
             <div className="mb-10">
-              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                Continue an evaluation
+              <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-[0.12em] mb-3">
+                Your evaluations
               </h2>
               <div className="space-y-2">
                 {existingNames.map(({ name, count, lastUsed, ids }) => (
@@ -205,7 +170,7 @@ const EvaluationLobby: React.FC<EvaluationLobbyProps> = ({ currentUser, onEnter,
                     <button
                       onClick={() => onEnter(name)}
                       disabled={deletingName === name}
-                      className="w-full text-left px-5 py-4 pr-12 bg-card border border-border rounded-xl shadow-sm hover:border-primary hover:shadow-md transition-all disabled:opacity-60 disabled:cursor-wait"
+                      className="w-full text-left px-5 py-4 pr-14 bg-card border border-border rounded-xl hover:border-primary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 disabled:cursor-wait"
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-foreground group-hover:text-primary transition-colors">
@@ -216,7 +181,7 @@ const EvaluationLobby: React.FC<EvaluationLobbyProps> = ({ currentUser, onEnter,
                         </svg>
                       </div>
                       <p className="text-xs text-muted-foreground mt-1">
-                        {count} {count === 1 ? 'entry' : 'entries'} · Last used {new Date(lastUsed).toLocaleDateString()}
+                        {count.toLocaleString()} {count === 1 ? 'entry' : 'entries'} · Last used {formatDate(lastUsed)}
                       </p>
                     </button>
                     <button
@@ -224,7 +189,7 @@ const EvaluationLobby: React.FC<EvaluationLobbyProps> = ({ currentUser, onEnter,
                       disabled={deletingName === name}
                       aria-label={`Delete evaluation "${name}"`}
                       title="Delete this evaluation"
-                      className="absolute top-1/2 -translate-y-1/2 right-3 p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-60"
+                      className="absolute top-1/2 -translate-y-1/2 right-3 p-2 rounded-md text-muted-foreground opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 hover:bg-red-50 hover:text-destructive transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
                     >
                       {deletingName === name ? (
                         <LoadingSpinner size="sm" />
@@ -240,7 +205,7 @@ const EvaluationLobby: React.FC<EvaluationLobbyProps> = ({ currentUser, onEnter,
                   <button
                     onClick={handleContinueUnnamed}
                     disabled={isNamingUnnamed}
-                    className="w-full text-left px-5 py-4 bg-card border border-dashed border-border rounded-xl shadow-sm hover:border-primary hover:shadow-md transition-all group disabled:opacity-60 disabled:cursor-wait"
+                    className="w-full text-left px-5 py-4 bg-card border border-dashed border-border rounded-xl hover:border-primary transition-colors group focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 disabled:cursor-wait"
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-muted-foreground group-hover:text-primary transition-colors">
@@ -265,31 +230,30 @@ const EvaluationLobby: React.FC<EvaluationLobbyProps> = ({ currentUser, onEnter,
 
           {/* New evaluation */}
           <div>
-            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-              {existingNames.length > 0 || unnamed ? 'Or start a new evaluation' : 'Name your evaluation'}
-            </h2>
-            <div className="flex gap-3">
+            <label htmlFor="new-evaluation-name" className="block text-xs font-semibold text-muted-foreground uppercase tracking-[0.12em] mb-3">
+              {hasExisting ? 'Start a new evaluation' : 'Name your evaluation'}
+            </label>
+            <form className="flex flex-col sm:flex-row gap-2.5" onSubmit={e => { e.preventDefault(); handleEnter(); }}>
               <input
+                id="new-evaluation-name"
                 type="text"
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleEnter()}
-                placeholder="e.g., Spanish Safety Review – April 2025"
-                className="flex-grow px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring text-sm"
-                autoFocus
+                placeholder="e.g. Farsi health questions, Spring review"
+                className="flex-grow px-4 py-3 rounded-xl border border-border bg-card focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent text-[15px] placeholder:text-gray-400"
+                autoFocus={!hasExisting}
               />
               <button
-                onClick={handleEnter}
+                type="submit"
                 disabled={!newName.trim()}
-                className="px-6 py-3 bg-primary text-primary-foreground font-semibold rounded-xl hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                className="px-6 py-3 bg-primary text-primary-foreground font-semibold rounded-xl hover:bg-primary-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
-                Enter Lab
+                Start
               </button>
-            </div>
+            </form>
           </div>
         </div>
       </main>
-    </div>
   );
 };
 

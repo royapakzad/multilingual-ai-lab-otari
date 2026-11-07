@@ -1,11 +1,8 @@
 
 
 import React, { useState, useEffect } from 'react';
-import { User, Theme } from './types';
-import {
-    USER_KEY,
-    THEME_KEY, APP_TITLE
-} from './constants';
+import { User } from './types';
+import { THEME_KEY, APP_TITLE } from './constants';
 import { signIn, signOut, onAuthStateChange, AuthState } from './services/authService';
 import Login from './components/PasswordGate';
 import Header from './components/Header';
@@ -21,17 +18,10 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
-  const [theme, setTheme] = useState<Theme>('light');
   const [evaluationName, setEvaluationName] = useState<string | null>(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showAccessRequests, setShowAccessRequests] = useState(false);
   const [showPartnerOrgs, setShowPartnerOrgs] = useState(false);
-
-  // Theme management - Force light mode only
-  useEffect(() => {
-    // Always use light theme
-    setTheme('light');
-  }, []);
 
   useEffect(() => {
     // Force light mode
@@ -53,11 +43,6 @@ const App: React.FC = () => {
 
     return unsubscribe; // Clean up listener on component unmount
   }, []);
-
-  // Theme toggle disabled - always light mode
-  const toggleTheme = () => {
-    // Do nothing - theme is locked to light mode
-  };
 
   const handleLoginSubmit = async (email: string, password: string) => {
     setLoginError(null);
@@ -92,51 +77,42 @@ const App: React.FC = () => {
 
   if (!currentUser) return <Login onLoginSubmit={handleLoginSubmit} loginError={loginError} />;
 
-  if (!evaluationName) {
-    return (
-      <>
-        <ApiKeyWarning />
-        <EvaluationLobby
-          currentUser={currentUser}
-          onEnter={setEvaluationName}
-          onLogout={handleLogout}
-          onChangePassword={() => setShowChangePassword(true)}
-          onOpenAccessRequests={() => setShowAccessRequests(true)}
-          onOpenPartnerOrgs={() => setShowPartnerOrgs(true)}
-        />
-        {showChangePassword && <ChangePassword onClose={() => setShowChangePassword(false)} />}
-        {showAccessRequests && <AccessRequestsPanel onClose={() => setShowAccessRequests(false)} />}
-        {showPartnerOrgs && <PartnerOrgsPanel onClose={() => setShowPartnerOrgs(false)} />}
-      </>
-    );
-  }
+  // The lab's name is the home link: from inside an evaluation it returns to the picker;
+  // on the picker itself it just scrolls back to the top.
+  const goHome = () => {
+    if (evaluationName) setEvaluationName(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
       <ApiKeyWarning />
       <Header
-        title={APP_TITLE}
         user={currentUser}
-        currentTheme={theme}
-        onThemeToggle={toggleTheme}
+        onHome={goHome}
         onLogout={handleLogout}
-        showBack={false}
         onChangePassword={() => setShowChangePassword(true)}
         onOpenAccessRequests={() => setShowAccessRequests(true)}
         onOpenPartnerOrgs={() => setShowPartnerOrgs(true)}
-        onTitleClick={() => setEvaluationName(null)}
       />
 
-      <main className="flex-grow container mx-auto p-4 sm:p-6 md:p-8" aria-live="polite">
-        <ReasoningLab
-          currentUser={currentUser}
-          evaluationName={evaluationName}
-          onLeaveEvaluation={() => setEvaluationName(null)}
-        />
-      </main>
+      {evaluationName ? (
+        <main className="flex-grow container mx-auto p-4 sm:p-6 md:p-8" aria-live="polite">
+          <ReasoningLab
+            currentUser={currentUser}
+            evaluationName={evaluationName}
+            onLeaveEvaluation={() => setEvaluationName(null)}
+          />
+        </main>
+      ) : (
+        <EvaluationLobby currentUser={currentUser} onEnter={setEvaluationName} />
+      )}
 
-      <footer className="text-center py-6 border-t border-border text-xs text-muted-foreground">
-        LLM Evaluation Labs &copy; {new Date().getFullYear()}. For research and educational purposes.
+      <footer className="py-6 border-t border-border text-xs text-muted-foreground">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row gap-1 sm:justify-between">
+          <span>{APP_TITLE} &copy; {new Date().getFullYear()}</span>
+          <span>For research and educational purposes.</span>
+        </div>
       </footer>
 
       {showChangePassword && <ChangePassword onClose={() => setShowChangePassword(false)} />}
