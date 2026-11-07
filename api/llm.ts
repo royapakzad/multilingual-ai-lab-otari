@@ -189,14 +189,43 @@ const callOtariChat = async (apiKey: string, body: any) => {
   };
 };
 
-const listOtariModels = async (apiKey: string) => {
-  const res = await fetch(`${OTARI_BASE_URL}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
-  const data: any = await res.json().catch(() => null);
-  if (!res.ok) throw new HttpError(res.status, data?.error?.message || data?.detail || `Otari models request failed (${res.status}).`);
-  const items: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
-  return items
-    .filter(m => m && typeof m.id === 'string')
-    .map(m => ({ id: m.id, name: m.name || m.display_name || m.id, ownedBy: m.owned_by ?? m.provider ?? null }));
+// Pull the array out of a list response whatever its wrapper ({data}, {models}, {items} or a bare array).
+const listItems = (data: any): any[] =>
+  Array.isArray(data) ? data
+    : Array.isArray(data?.data) ? data.data
+    : Array.isArray(data?.models) ? data.models
+    : Array.isArray(data?.items) ? data.items
+    : [];
+
+type ListedModel = { id: string; name: string; ownedBy: string | null };
+
+/**
+ * Models the caller's workspace can use. Merges two Otari endpoints:
+ *  - GET /catalog/models: per Otari's docs, applies the key's workspace (its disabled keys and
+ *    model lists) and includes offerings served on the ORGANIZATION'S OWN provider keys
+ *    (credential "organization"), e.g. GPT-5 via your own OpenAI key.
+ *  - GET /models: Otari's curated catalog, which on its own may list only Otari-hosted models.
+ * Either one failing is tolerated; both failing is an error.
+ */
+const listOtariModels = async (apiKey: string): Promise<ListedModel[]> => {
+  const get = async (path: string) => {
+    const res = await fetch(`${OTARI_BASE_URL}${path}`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const data: any = await res.json().catch(() => null);
+    if (!res.ok) throw new HttpError(res.status, data?.error?.message || data?.detail || `Otari ${path} request failed (${res.status}).`);
+    return listItems(data);
+  };
+  const [catalog, curated] = await Promise.allSettled([get('/catalog/models'), get('/models')]);
+  if (catalog.status === 'rejected' && curated.status === 'rejected') throw curated.reason;
+
+  const byId = new Map<string, ListedModel>();
+  const add = (m: any) => {
+    if (!m || typeof m.id !== 'string' || byId.has(m.id)) return;
+    byId.set(m.id, { id: m.id, name: m.name || m.display_name || m.id, ownedBy: m.owned_by ?? m.vendor ?? null });
+  };
+  if (catalog.status === 'fulfilled') catalog.value.forEach(add);
+  else console.warn('api/llm: catalog listing failed, using /models only:', catalog.reason?.message);
+  if (curated.status === 'fulfilled') curated.value.forEach(add);
+  return Array.from(byId.values());
 };
 
 // ---------------------------------------------------------------------------------------------
