@@ -28,6 +28,7 @@ import { generateLlmResponse, translateText, evaluateWithLlm, fetchGatewayWorksp
 import { analyzeTextResponse, countTextUnits, getCountUnitForLanguage } from '../services/textAnalysisService';
 import * as db from '../services/databaseService';
 import EvaluationComparison from './EvaluationComparison';
+import { ModeBadge } from './EvaluationModes';
 
 // Translation-picker option meaning "no machine translation — the evaluator writes prompt B".
 // Also recorded as a record's translationModel when a machine translation was edited by hand.
@@ -946,6 +947,7 @@ const ReasoningLab: React.FC<ReasoningLabProps> = ({ currentUser, evaluationName
           <div className="flex items-center gap-3">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Evaluation</span>
             <span className="font-bold text-foreground text-base">{evaluationName}</span>
+            <ModeBadge mode="single-turn" />
           </div>
           <button
             onClick={onLeaveEvaluation}

@@ -234,6 +234,10 @@ interface EvaluationFormProps {
   // has to be defined once per evaluation, not once per scenario.
   onCriterionAddedToEvaluation: (criterion: CustomCriterionScore) => void;
   onCriterionRemovedFromEvaluation: (id: string) => void;
+
+  // 'response' (default): single-prompt wording, heading and time/length metrics.
+  // 'conversation': multi-turn wording, no heading or per-response metrics (the parent shows its own).
+  unit?: 'response' | 'conversation';
 }
 
 const HarmAssessmentSection: React.FC<{
@@ -419,7 +423,9 @@ const EvaluationForm: React.FC<EvaluationFormProps> = ({
   onToggleHiddenBuiltInKey,
   onCriterionAddedToEvaluation,
   onCriterionRemovedFromEvaluation,
+  unit = 'response',
 }) => {
+  const isConversation = unit === 'conversation';
 
   const handleScoreChange = (setter: Function, currentScores: LanguageSpecificRubricScores) =>
     (key: keyof LanguageSpecificRubricScores, value: string | number | VerifiableEntity[]) => {
@@ -520,8 +526,9 @@ const EvaluationForm: React.FC<EvaluationFormProps> = ({
   
   return (
     <form onSubmit={handleSubmit} className="space-y-12">
-      <h2 className="text-xl sm:text-2xl font-bold text-foreground text-center tracking-tight">3. Assessment</h2>
+      {!isConversation && <h2 className="text-xl sm:text-2xl font-bold text-foreground text-center tracking-tight">3. Assessment</h2>}
       
+      {!isConversation && (
       <div className="bg-background p-4 rounded-lg border border-border/70 shadow-sm">
         <h3 className="sr-only">Performance Metrics</h3>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 text-center">
@@ -551,9 +558,10 @@ const EvaluationForm: React.FC<EvaluationFormProps> = ({
             </div>
         </div>
       </div>
+      )}
       
       <div>
-        <h3 className="text-lg font-semibold text-foreground mb-4 text-center">A. Single Response Assessment</h3>
+        <h3 className="text-lg font-semibold text-foreground mb-4 text-center">{isConversation ? 'A. Whole-Conversation Assessment' : 'A. Single Response Assessment'}</h3>
 
         {/* Built-in Criteria Management */}
         <div className="mb-6 p-4 rounded-lg border border-dashed border-border bg-background/50">
@@ -688,7 +696,7 @@ const EvaluationForm: React.FC<EvaluationFormProps> = ({
       </div>
 
       <fieldset disabled={isComparisonDisabled} className="space-y-8 pt-8 border-t border-border disabled:opacity-60 disabled:cursor-not-allowed">
-        <h3 className="text-lg font-semibold text-foreground text-center mb-4">B. Cross-Response Disparity Assessment</h3>
+        <h3 className="text-lg font-semibold text-foreground text-center mb-4">{isConversation ? 'B. Cross-Conversation Disparity Assessment' : 'B. Cross-Response Disparity Assessment'}</h3>
         {isComparisonDisabled && (
             <div className="p-3 text-sm bg-yellow-100/80 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300 border border-yellow-400/50 dark:border-yellow-600/50 rounded-lg text-center font-medium">
                 Comparison is disabled because at least one response failed to generate.

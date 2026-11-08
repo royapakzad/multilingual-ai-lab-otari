@@ -1,7 +1,7 @@
 
 
 import React, { useState, useEffect } from 'react';
-import { User } from './types';
+import { User, EvaluationMode } from './types';
 import { THEME_KEY, APP_TITLE } from './constants';
 import { signIn, signOut, onAuthStateChange, AuthState } from './services/authService';
 import Login from './components/PasswordGate';
@@ -9,6 +9,7 @@ import Header from './components/Header';
 import ApiKeyWarning from './components/ApiKeyWarning';
 import ReasoningLab from './components/ReasoningLab';
 import EvaluationLobby from './components/EvaluationLobby';
+import MultiTurnLab from './components/MultiTurnLab';
 import ChangePassword from './components/ChangePassword';
 import AccessRequestsPanel from './components/AccessRequestsPanel';
 import PartnerOrgsPanel from './components/PartnerOrgsPanel';
@@ -18,7 +19,9 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
-  const [evaluationName, setEvaluationName] = useState<string | null>(null);
+  // The open evaluation: its name and the mode it was created in. null = the evaluations list.
+  const [evaluation, setEvaluation] = useState<{ name: string; mode: EvaluationMode } | null>(null);
+  const leaveEvaluation = () => setEvaluation(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showAccessRequests, setShowAccessRequests] = useState(false);
   const [showPartnerOrgs, setShowPartnerOrgs] = useState(false);
@@ -80,7 +83,7 @@ const App: React.FC = () => {
   // The lab's name is the home link: from inside an evaluation it returns to the picker;
   // on the picker itself it just scrolls back to the top.
   const goHome = () => {
-    if (evaluationName) setEvaluationName(null);
+    if (evaluation) setEvaluation(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -96,16 +99,17 @@ const App: React.FC = () => {
         onOpenPartnerOrgs={() => setShowPartnerOrgs(true)}
       />
 
-      {evaluationName ? (
+      {evaluation ? (
         <main className="flex-grow container mx-auto p-4 sm:p-6 md:p-8" aria-live="polite">
-          <ReasoningLab
-            currentUser={currentUser}
-            evaluationName={evaluationName}
-            onLeaveEvaluation={() => setEvaluationName(null)}
-          />
+          {/* Each mode has its own lab, so features of one mode never affect another. */}
+          {evaluation.mode === 'multi-turn' ? (
+            <MultiTurnLab currentUser={currentUser} evaluationName={evaluation.name} onLeaveEvaluation={leaveEvaluation} />
+          ) : (
+            <ReasoningLab currentUser={currentUser} evaluationName={evaluation.name} onLeaveEvaluation={leaveEvaluation} />
+          )}
         </main>
       ) : (
-        <EvaluationLobby currentUser={currentUser} onEnter={setEvaluationName} />
+        <EvaluationLobby currentUser={currentUser} onEnter={(name, mode) => setEvaluation({ name, mode })} />
       )}
 
       <footer className="py-6 border-t border-border text-xs text-muted-foreground">
