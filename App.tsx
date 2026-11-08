@@ -10,6 +10,7 @@ import ApiKeyWarning from './components/ApiKeyWarning';
 import ReasoningLab from './components/ReasoningLab';
 import EvaluationLobby from './components/EvaluationLobby';
 import MultiTurnLab from './components/MultiTurnLab';
+import ResearchLab from './components/ResearchLab';
 import ChangePassword from './components/ChangePassword';
 import AccessRequestsPanel from './components/AccessRequestsPanel';
 import PartnerOrgsPanel from './components/PartnerOrgsPanel';
@@ -104,6 +105,8 @@ const App: React.FC = () => {
           {/* Each mode has its own lab, so features of one mode never affect another. */}
           {evaluation.mode === 'multi-turn' ? (
             <MultiTurnLab currentUser={currentUser} evaluationName={evaluation.name} onLeaveEvaluation={leaveEvaluation} />
+          ) : evaluation.mode === 'agentic' ? (
+            <ResearchLab currentUser={currentUser} evaluationName={evaluation.name} onLeaveEvaluation={leaveEvaluation} />
           ) : (
             <ReasoningLab currentUser={currentUser} evaluationName={evaluation.name} onLeaveEvaluation={leaveEvaluation} />
           )}

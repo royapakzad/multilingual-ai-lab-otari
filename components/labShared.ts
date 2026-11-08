@@ -36,7 +36,7 @@ export const usePersistedModel = (storageKey: string, fallback: string) => {
  * running template of custom criteria (defined once, carried into every new entry).
  * `scope` keeps different modes' evaluations apart even when they share a name.
  */
-export const useEvaluationCriteria = (scope: string) => {
+export const useEvaluationCriteria = (scope: string, defaultCriteria: CustomCriterionScore[] = []) => {
   const hiddenKey = `${HIDDEN_BUILT_IN_CRITERIA_KEY_PREFIX}${scope}`;
   const templateKey = `${CUSTOM_CRITERIA_TEMPLATE_KEY_PREFIX}${scope}`;
   const [hiddenBuiltInKeys, setHidden] = useState<string[]>([]);
@@ -44,7 +44,12 @@ export const useEvaluationCriteria = (scope: string) => {
 
   useEffect(() => {
     const h = readJson<unknown>(hiddenKey, []);
-    const t = readJson<unknown>(templateKey, []);
+    // A brand-new evaluation starts with the mode's default criteria; once the template has been
+    // saved (even emptied by the evaluator), it is used as-is.
+    let stored: string | null = null;
+    try { stored = localStorage.getItem(templateKey); } catch { /* storage unavailable */ }
+    const t = stored === null ? defaultCriteria : readJson<unknown>(templateKey, []);
+    if (stored === null && defaultCriteria.length) writeJson(templateKey, defaultCriteria);
     setHidden(Array.isArray(h) ? h : []);
     setTemplate(Array.isArray(t) ? t : []);
   }, [hiddenKey, templateKey]);

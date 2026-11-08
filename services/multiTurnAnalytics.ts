@@ -122,14 +122,16 @@ export const groupBy = <K extends string>(records: MultiTurnEvaluationRecord[], 
  * the best option (i.e. "some harm"). Only completed judge results, and only dimensions
  * that were part of each record's form.
  */
-export const humanVsJudge = (records: MultiTurnEvaluationRecord[]) => {
+// Works for any record type that has human and judge scores (conversations, research runs…).
+type Judged = Pick<MultiTurnEvaluationRecord, 'llmEvaluationStatus' | 'llmScores' | 'hiddenBuiltInKeys' | 'humanScores'>;
+export const humanVsJudge = <R extends Judged>(records: R[]) => {
   const judged = records.filter(r => r.llmEvaluationStatus === 'completed' && r.llmScores);
   return RUBRIC_DIMENSIONS.map(dim => {
     const best = dim.options?.[0]?.value;
-    const rows = judged.filter(r => isDimensionVisibleForRecord(r.hiddenBuiltInKeys, dim.key));
+    const rows: R[] = judged.filter(r => isDimensionVisibleForRecord(r.hiddenBuiltInKeys, dim.key));
     const val = (v: unknown): number | null =>
       dim.isSlider ? (typeof v === 'number' ? v : null) : (typeof v === 'string' ? (v === best ? 0 : 1) : null);
-    const avg = (pick: (r: MultiTurnEvaluationRecord) => unknown) =>
+    const avg = (pick: (r: R) => unknown) =>
       mean(rows.map(r => val(pick(r))).filter((x): x is number => x != null));
     const k = dim.key as string;
     return {

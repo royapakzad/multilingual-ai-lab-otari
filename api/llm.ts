@@ -15,10 +15,13 @@
 //   POST /api/llm                     chat completion  { model, messages, temperature?, response_format?, role? }
 //   GET  /api/llm?action=models       models the caller's Otari key may use
 //   GET  /api/llm?action=whoami       which workspace/key the caller is routed to
+//   POST /api/llm?action=research     web-research run { model, question, searchMode: 'native'|'otari', maxSearches? }
+//                                     → normalized trace: searches, results, opened pages, citations (api/_research.ts)
 //
 // Zero npm dependencies on purpose: Node's built-in crypto + fetch only.
 
 import { createPublicKey, verify as cryptoVerify, KeyObject } from 'node:crypto';
+import { runResearch, ResearchError } from './_research';
 
 const OTARI_BASE_URL = (process.env.OTARI_BASE_URL || 'https://api.otari.ai/api/v1').replace(/\/+$/, '');
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'multilingual-ai-evaluation';
@@ -131,7 +134,7 @@ const publicWorkspace = (w: Workspace) => ({
 // Otari calls
 // ---------------------------------------------------------------------------------------------
 
-const ALLOWED_ROLES = new Set(['evaluated', 'translation', 'judge']);
+const ALLOWED_ROLES = new Set(['evaluated', 'translation', 'judge', 'analysis']);
 const MAX_BODY_CHARS = 400_000;
 
 const callOtariChat = async (apiKey: string, body: any) => {
@@ -258,6 +261,17 @@ export default async function handler(req: any, res: any) {
     if (req.method === 'GET' && action === 'models') {
       const models = await listOtariModels(workspace.apiKey);
       return res.status(200).json({ models, workspace: publicWorkspace(workspace) });
+    }
+
+    if (req.method === 'POST' && action === 'research') {
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body;
+      try {
+        const trace = await runResearch(OTARI_BASE_URL, workspace.apiKey, body);
+        return res.status(200).json({ ...trace, usage: { ...trace.usage, workspace: publicWorkspace(workspace).label, orgId: workspace.orgId } });
+      } catch (e) {
+        if (e instanceof ResearchError) throw new HttpError(e.status, e.message, e.code);
+        throw e;
+      }
     }
 
     if (req.method === 'POST') {

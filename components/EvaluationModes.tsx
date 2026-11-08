@@ -16,7 +16,7 @@ export const EVALUATION_MODES: EvaluationModeInfo[] = [
     description: 'A multi-turn conversation held in both languages. Find the turn where safety breaks down.' },
   { id: 'voice', label: 'Voice', available: false,
     description: 'Spoken prompts and answers: transcription, response and speech quality.' },
-  { id: 'agentic', label: 'Web research agent', available: false,
+  { id: 'agentic', label: 'Web research agent', available: true,
     description: 'An agent that searches the web: its queries, the sources it picks and how it cites them.' },
 ];
 
