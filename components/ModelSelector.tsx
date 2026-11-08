@@ -10,6 +10,8 @@ interface ModelSelectorProps {
   onModelChange: (modelId: string) => void;
   /** Extra non-model option at the top, e.g. "Manual translation". */
   extraOption?: { id: string; name: string };
+  /** Smaller label and button, with the list floating over the page (for settings bars). */
+  compact?: boolean;
 }
 
 const LicenseBadge: React.FC<{ license?: ModelLicense }> = ({ license }) => {
@@ -30,7 +32,7 @@ const GROUPS: { key: 'suggested' | ModelLicense; title: string }[] = [
  * organization key is allowed to call. Used three times — model under evaluation, translation
  * model, and LLM-as-a-judge model.
  */
-const ModelSelector: React.FC<ModelSelectorProps> = ({ label, description, selectedModel, onModelChange, extraOption }) => {
+const ModelSelector: React.FC<ModelSelectorProps> = ({ label, description, selectedModel, onModelChange, extraOption, compact }) => {
   const [search, setSearch] = useState('');
   const [gatewayModels, setGatewayModels] = useState<ModelDefinition[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -100,20 +102,22 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ label, description, selec
   );
 
   return (
-    <div ref={containerRef}>
-      <h3 className="text-sm font-semibold text-foreground mb-1">{label}</h3>
-      {description && <p className="text-xs text-muted-foreground mb-2">{description}</p>}
+    <div ref={containerRef} className={compact ? 'relative' : undefined}>
+      {compact
+        ? <span className="block text-xs font-medium text-muted-foreground mb-1" title={description}>{label}</span>
+        : <h3 className="text-sm font-semibold text-foreground mb-1">{label}</h3>}
+      {description && !compact && <p className="text-xs text-muted-foreground mb-2">{description}</p>}
 
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between gap-2 p-3 border border-border rounded-lg bg-card hover:bg-muted transition-colors text-sm font-medium text-card-foreground"
+        className={`w-full flex items-center justify-between gap-2 ${compact ? 'px-2.5 py-2' : 'p-3'} border border-border rounded-lg bg-card hover:bg-muted transition-colors text-sm font-medium text-card-foreground`}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
         <span className="truncate">{displayName || 'Select a model...'}</span>
         <span className="flex items-center gap-2 flex-shrink-0">
-          <LicenseBadge license={selectedLicense} />
+          {!compact && <LicenseBadge license={selectedLicense} />}
           <svg className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
           </svg>
@@ -124,7 +128,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ label, description, selec
       )}
 
       {open && (
-        <div className="mt-1 border border-border rounded-lg bg-card shadow-lg z-50 relative">
+        <div className={`mt-1 border border-border rounded-lg bg-card shadow-lg z-50 ${compact ? 'absolute left-0 top-full w-[22rem] max-w-[90vw]' : 'relative'}`}>
           <div className="p-2 border-b border-border">
             <input
               type="text"

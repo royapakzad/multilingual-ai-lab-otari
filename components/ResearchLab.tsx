@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import {
@@ -58,13 +58,41 @@ const engineFor = (model: string, mode: SearchMode) => {
 
 // --- Small pieces -----------------------------------------------------------------------------
 
-const TypeTag: React.FC<{ label?: SourceLabel }> = ({ label }) => {
-  if (!label) return null;
+// Model answers are long markdown documents: keep their headings close to body size so two of
+// them fit side by side and read like a report, not a web page.
+const ANSWER_CLS = [
+  'prose prose-sm max-w-none text-card-foreground leading-relaxed [&>*:first-child]:mt-0',
+  'prose-headings:text-foreground prose-headings:font-semibold',
+  'prose-h1:text-[0.95rem] prose-h1:mt-5 prose-h1:mb-2 prose-h2:text-[0.95rem] prose-h2:mt-5 prose-h2:mb-2',
+  'prose-h3:text-sm prose-h3:mt-4 prose-h3:mb-1.5 prose-h4:text-sm prose-h4:mt-3 prose-h4:mb-1',
+  'prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-hr:my-4 prose-blockquote:my-3',
+  'prose-strong:text-foreground prose-a:text-primary prose-a:no-underline hover:prose-a:underline',
+  'prose-table:text-xs prose-th:px-2 prose-td:px-2',
+].join(' ');
+
+const Th: React.FC<{ children?: React.ReactNode; right?: boolean; className?: string }> = ({ children, right, className = '' }) => (
+  <th scope="col" className={`px-3 py-2 text-xs font-medium text-muted-foreground whitespace-nowrap ${right ? 'text-right' : 'text-left'} ${className}`}>{children}</th>
+);
+const Td: React.FC<{ children?: React.ReactNode; right?: boolean; className?: string }> = ({ children, right, className = '' }) => (
+  <td className={`px-3 py-2 align-middle ${right ? 'text-right tabular-nums' : ''} ${className}`}>{children}</td>
+);
+/** A bordered table with a tinted header row. */
+const Table: React.FC<{ head: React.ReactNode; children: React.ReactNode; className?: string }> = ({ head, children, className = '' }) => (
+  <div className={`overflow-x-auto rounded-lg border border-border ${className}`}>
+    <table className="min-w-full text-sm">
+      <thead className="bg-muted border-b border-border"><tr>{head}</tr></thead>
+      <tbody className="divide-y divide-border">{children}</tbody>
+    </table>
+  </div>
+);
+
+const TypeTag: React.FC<{ label?: SourceLabel; withLanguage?: boolean }> = ({ label, withLanguage = true }) => {
+  if (!label) return <span className="text-xs text-muted-foreground">—</span>;
   const warn = label.type === 'state_media';
   return (
-    <span className={`inline-flex items-center gap-1 text-[11px] leading-4 rounded px-1.5 py-px border whitespace-nowrap ${warn ? 'border-amber-500 bg-amber-50 text-amber-900' : 'border-border bg-muted text-muted-foreground'}`}
+    <span className={`inline-flex items-center gap-1 text-[11px] leading-4 rounded px-1.5 py-px border whitespace-nowrap ${warn ? 'border-amber-500 bg-amber-50 text-amber-900' : 'border-border bg-card text-muted-foreground'}`}
       title={label.confirmed ? 'Checked by an evaluator' : 'Suggested automatically, not yet checked'}>
-      {warn && <span aria-hidden="true">⚠</span>}{SOURCE_TYPE_LABELS[label.type]}{label.language ? ` · ${label.language}` : ''}
+      {warn && <span aria-hidden="true">⚠</span>}{SOURCE_TYPE_LABELS[label.type]}{withLanguage && label.language ? ` · ${label.language}` : ''}
     </span>
   );
 };
@@ -73,23 +101,38 @@ const Pill: React.FC<{ children: React.ReactNode; tone: 'cited' | 'opened' }> = 
   <span className={`text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-px border ${tone === 'cited' ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : 'bg-blue-50 text-blue-800 border-blue-300'}`}>{children}</span>
 );
 
-const SideHeader: React.FC<{ title: string; trace: ResearchTrace }> = ({ title, trace }) => (
-  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 mb-3">
-    <h4 className="text-sm font-semibold text-foreground">{title}</h4>
-    <span className="text-xs text-muted-foreground">{ENGINE_LABEL[trace.engine]} · {trace.searches.length} {trace.searches.length === 1 ? 'search' : 'searches'} · {new Set(trace.citations.map(c => normUrl(c.url))).size} pages cited</span>
-    <span className="ml-auto text-xs text-muted-foreground tabular-nums">{[trace.durationSeconds != null ? `${trace.durationSeconds.toFixed(0)}s` : null, fmtCost(trace.usage)].filter(Boolean).join(' · ')}</span>
+const pagesCited = (t: ResearchTrace) => new Set(t.citations.map(c => normUrl(c.url))).size;
+
+/** Heading of one language column: the language, then how the run went. */
+const ColumnHead: React.FC<{ title: string; trace: ResearchTrace; action?: React.ReactNode }> = ({ title, trace, action }) => (
+  <div className="flex items-start justify-between gap-3 pb-3 mb-4 border-b border-border">
+    <div className="min-w-0">
+      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      <p className="text-xs text-muted-foreground mt-0.5 tabular-nums">
+        {[ENGINE_LABEL[trace.engine], `${trace.searches.length} ${trace.searches.length === 1 ? 'search' : 'searches'}`, `${pagesCited(trace)} pages cited`,
+          trace.durationSeconds != null ? `${trace.durationSeconds.toFixed(0)}s` : null, fmtCost(trace.usage)].filter(Boolean).join(' · ')}
+      </p>
+    </div>
+    {action}
   </div>
 );
 
 const TwoColumns: React.FC<{ left: React.ReactNode; right: React.ReactNode }> = ({ left, right }) => (
-  <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-8">{<div className="min-w-0">{left}</div>}{<div className="min-w-0">{right}</div>}</div>
+  <div className="grid grid-cols-1 lg:grid-cols-2 gap-y-10 lg:divide-x lg:divide-border">
+    <div className="min-w-0 lg:pr-6">{left}</div>
+    <div className="min-w-0 lg:pl-6">{right}</div>
+  </div>
+);
+
+const RunError: React.FC<{ title: string; trace: ResearchTrace }> = ({ title, trace }) => (
+  <div><ColumnHead title={title} trace={trace} /><p className="text-sm text-red-700 rounded-lg border border-red-200 bg-red-50 px-3 py-2">{trace.error}</p></div>
 );
 
 // --- Step views -------------------------------------------------------------------------------
 
 const AnswerView: React.FC<{ trace: ResearchTrace; title: string; lang: string; labels: SourceLabel[] }> = ({ trace, title, lang, labels }) => {
   const [full, setFull] = useState(false);
-  if (trace.error) return <div><SideHeader title={title} trace={trace} /><p className="text-sm text-red-700">{trace.error}</p></div>;
+  if (trace.error) return <RunError title={title} trace={trace} />;
   const long = trace.answer.length > 1400;
   // Claude cites the same page once per quoted passage: show each page once, with its quotes.
   const grouped = Array.from(trace.citations.reduce((m, c) => {
@@ -100,75 +143,74 @@ const AnswerView: React.FC<{ trace: ResearchTrace; title: string; lang: string; 
   }, new Map<string, { url: string; quotes: string[] }>()).values());
   return (
     <div>
-      <SideHeader title={title} trace={trace} />
-      <div className="relative">
-        <div className={`prose prose-sm max-w-none text-card-foreground ${long && !full ? 'max-h-[26rem] overflow-hidden' : ''}`} lang={lang} dir="auto" dangerouslySetInnerHTML={md(trace.answer)} />
-        {long && !full && <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-white to-transparent pointer-events-none" />}
+      <ColumnHead title={title} trace={trace}
+        action={long ? <button onClick={() => setFull(f => !f)} className="shrink-0 text-xs font-medium text-primary hover:underline">{full ? 'Collapse' : 'Expand'}</button> : undefined} />
+      <div className={long && !full ? 'max-h-[30rem] overflow-y-auto pr-3 -mr-1 [scrollbar-gutter:stable]' : ''}>
+        <div className={ANSWER_CLS} lang={lang} dir="auto" dangerouslySetInnerHTML={md(trace.answer)} />
       </div>
-      {long && <button onClick={() => setFull(f => !f)} className="mt-2 text-sm text-primary hover:underline">{full ? 'Show less' : 'Show full answer'}</button>}
-      <div className="mt-4 pt-3 border-t border-border">
-        <div className="text-xs font-semibold text-muted-foreground mb-2">Cited sources ({grouped.length} {grouped.length === 1 ? 'page' : 'pages'})</div>
-        {grouped.length === 0 ? <p className="text-sm text-muted-foreground">The answer cites no sources.</p> : (
-          <ol className="space-y-2">
-            {grouped.map((c, i) => (
-              <li key={c.url} className="flex gap-2 text-sm">
-                <span className="w-5 shrink-0 text-right text-xs text-muted-foreground tabular-nums pt-0.5">{i + 1}</span>
-                <span className="min-w-0">
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    <a href={c.url} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground hover:text-primary hover:underline">{domainOf(c.url)}</a>
-                    <TypeTag label={labelFor(labels, domainOf(c.url))} />
-                    {c.quotes.length > 1 && <span className="text-[11px] text-muted-foreground">{c.quotes.length} quotes</span>}
-                  </span>
-                  {c.quotes[0] && <span className="block text-xs text-muted-foreground mt-0.5 line-clamp-2" dir="auto" title={c.quotes.join('\n\n')}>“{c.quotes[0]}”</span>}
-                </span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
+
+      <h4 className="mt-6 mb-2 text-xs font-semibold text-muted-foreground">Cited sources · {grouped.length} {grouped.length === 1 ? 'page' : 'pages'}</h4>
+      {grouped.length === 0 ? <p className="text-sm text-muted-foreground">The answer cites no sources.</p> : (
+        <Table head={<><Th className="w-8" right>#</Th><Th>Website</Th><Th>Type · language</Th></>}>
+          {grouped.map((c, i) => (
+            <tr key={c.url}>
+              <Td right className="text-xs text-muted-foreground">{i + 1}</Td>
+              <Td className="min-w-0">
+                <a href={c.url} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground hover:text-primary hover:underline">{domainOf(c.url)}</a>
+                {c.quotes.length > 1 && <span className="ml-1.5 text-[11px] text-muted-foreground">{c.quotes.length} quotes</span>}
+                {c.quotes[0] && <span className="text-xs text-muted-foreground mt-0.5 line-clamp-1 break-words" dir="auto" title={c.quotes.join('\n\n')}>“{c.quotes[0]}”</span>}
+              </Td>
+              <Td><TypeTag label={labelFor(labels, domainOf(c.url))} /></Td>
+            </tr>
+          ))}
+        </Table>
+      )}
     </div>
   );
 };
 
 const SearchesView: React.FC<{ trace: ResearchTrace; title: string; labels: SourceLabel[]; queryLanguages: (string | null)[] }> = ({ trace, title, labels, queryLanguages }) => {
   const [showAll, setShowAll] = useState<Record<number, boolean>>({});
-  if (trace.error) return <div><SideHeader title={title} trace={trace} /><p className="text-sm text-red-700">{trace.error}</p></div>;
+  if (trace.error) return <RunError title={title} trace={trace} />;
   const cited = new Set(trace.citations.map(c => normUrl(c.url)));
   const opened = new Set(trace.opened.map(normUrl));
   const inResults = new Set(trace.searches.flatMap(s => s.results.map(r => normUrl(r.url))));
   const extraOpened = trace.opened.filter(u => !inResults.has(normUrl(u)));
   return (
     <div>
-      <SideHeader title={title} trace={trace} />
+      <ColumnHead title={title} trace={trace} />
       {trace.searches.length === 0 && <p className="text-sm text-muted-foreground">The model answered without searching.</p>}
-      <ol className="space-y-5">
+      <ol className="space-y-4">
         {trace.searches.map((s, i) => {
           const used = s.results.filter(r => cited.has(normUrl(r.url)) || opened.has(normUrl(r.url)));
           const all = showAll[s.index] || used.length === 0;
           const list = all ? s.results : used;
           return (
-            <li key={s.index}>
-              <div className="flex flex-wrap items-baseline gap-2 mb-1.5">
-                <span className="text-xs font-semibold text-muted-foreground tabular-nums">{s.index}.</span>
-                <span className="text-sm font-medium text-foreground" dir="auto">{s.query || '(query not reported)'}</span>
-                {queryLanguages[i] && <span className="text-[11px] text-muted-foreground">· {queryLanguages[i]}</span>}
+            <li key={s.index} className="rounded-lg border border-border overflow-hidden">
+              <div className="flex items-baseline gap-2.5 px-3 py-2 bg-muted border-b border-border">
+                <span className="text-xs font-semibold text-muted-foreground tabular-nums">{s.index}</span>
+                <span className="text-sm font-medium text-foreground min-w-0 flex-1" dir="auto">{s.query || '(query not reported)'}</span>
+                {queryLanguages[i] && <span className="shrink-0 text-[11px] text-muted-foreground">{queryLanguages[i]}</span>}
               </div>
-              <ul className="border-l-2 border-border pl-3 space-y-1">
-                {list.map(r => {
-                  const d = domainOf(r.url), k = normUrl(r.url);
-                  return (
-                    <li key={`${r.rank}-${r.url}`} className="flex items-center gap-2 text-sm min-w-0" title={r.title}>
-                      <span className="w-5 shrink-0 text-right text-xs text-muted-foreground tabular-nums">#{r.rank}</span>
-                      <a href={r.url} target="_blank" rel="noopener noreferrer" className="truncate text-foreground hover:text-primary hover:underline">{d}</a>
-                      <TypeTag label={labelFor(labels, d)} />
-                      {opened.has(k) && <Pill tone="opened">Opened</Pill>}
-                      {cited.has(k) && <Pill tone="cited">Cited</Pill>}
-                    </li>
-                  );
-                })}
-              </ul>
+              {list.length === 0 ? <p className="px-3 py-2 text-xs text-muted-foreground">No results reported.</p> : (
+                <table className="min-w-full text-sm">
+                  <tbody className="divide-y divide-border">
+                    {list.map(r => {
+                      const d = domainOf(r.url), k = normUrl(r.url);
+                      return (
+                        <tr key={`${r.rank}-${r.url}`} title={r.title}>
+                          <td className="w-10 pl-3 pr-1 py-1.5 text-right text-xs text-muted-foreground tabular-nums">#{r.rank}</td>
+                          <td className="px-2 py-1.5 max-w-0 w-full"><a href={r.url} target="_blank" rel="noopener noreferrer" className="block truncate text-foreground hover:text-primary hover:underline">{d}</a></td>
+                          <td className="px-2 py-1.5"><TypeTag label={labelFor(labels, d)} withLanguage={false} /></td>
+                          <td className="pl-1 pr-3 py-1.5 whitespace-nowrap text-right space-x-1">{opened.has(k) && <Pill tone="opened">Opened</Pill>}{cited.has(k) && <Pill tone="cited">Cited</Pill>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
               {used.length > 0 && s.results.length > used.length && (
-                <button onClick={() => setShowAll(m => ({ ...m, [s.index]: !m[s.index] }))} className="ml-5 mt-1 text-xs text-primary hover:underline">
+                <button onClick={() => setShowAll(m => ({ ...m, [s.index]: !m[s.index] }))} className="w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-muted border-t border-border">
                   {showAll[s.index] ? 'Show only opened and cited' : `Show all ${s.results.length} results`}
                 </button>
               )}
@@ -177,9 +219,11 @@ const SearchesView: React.FC<{ trace: ResearchTrace; title: string; labels: Sour
         })}
       </ol>
       {extraOpened.length > 0 && (
-        <div className="mt-5">
-          <div className="text-xs font-semibold text-muted-foreground mb-1">Opened directly</div>
-          <ul className="space-y-1">{extraOpened.map(u => <li key={u} className="flex items-center gap-2 text-sm"><a href={u} target="_blank" rel="noopener noreferrer" className="hover:underline">{domainOf(u)}</a><TypeTag label={labelFor(labels, domainOf(u))} /></li>)}</ul>
+        <div className="mt-4">
+          <h4 className="mb-2 text-xs font-semibold text-muted-foreground">Opened directly (not from a search)</h4>
+          <Table head={<><Th>Website</Th><Th>Type · language</Th></>}>
+            {extraOpened.map(u => <tr key={u}><Td><a href={u} target="_blank" rel="noopener noreferrer" className="hover:underline">{domainOf(u)}</a></Td><Td><TypeTag label={labelFor(labels, domainOf(u))} /></Td></tr>)}
+          </Table>
         </div>
       )}
     </div>
@@ -197,94 +241,89 @@ const SourcesView: React.FC<{
     .sort((a, b) => Number(citedEn.has(b.domain) || citedNa.has(b.domain)) - Number(citedEn.has(a.domain) || citedNa.has(a.domain)));
   const set = (domain: string, patch: Partial<SourceLabel>) => onChange?.(labels.map(l => (l.domain === domain ? { ...l, ...patch } : l)));
   const use = (seen: Set<string>, cited: Set<string>, d: string) => cited.has(d) ? <Pill tone="cited">Cited</Pill> : seen.has(d) ? <span className="text-xs text-muted-foreground">Seen</span> : <span className="text-xs text-muted-foreground">—</span>;
-  const input = 'w-full px-2 py-1 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-ring';
+  const input = 'w-full px-2 py-1 text-sm rounded-md border border-border bg-card focus:outline-none focus:ring-2 focus:ring-ring';
   const unchecked = labels.filter(l => !l.confirmed).length;
+  const short = shortName(titleB);
 
   return (
-    <div className="space-y-8">
+    <div className="grid grid-cols-1 xl:grid-cols-[17rem_minmax(0,1fr)] gap-8">
       <div>
         <h4 className="text-sm font-semibold text-foreground">Source languages</h4>
-        <p className="text-xs text-muted-foreground mt-0.5 mb-3">Number of websites in each language that each run saw (in search results, opened or cited) and cited.</p>
-        <div className="overflow-x-auto max-w-2xl">
-          <table className="min-w-full text-sm">
-            <thead className="border-b border-border text-xs text-muted-foreground">
-              <tr><th className="text-left px-2 py-2 font-semibold">Website language</th><th className="text-right px-2 py-2 font-semibold">English run: seen</th><th className="text-right px-2 py-2 font-semibold">cited</th><th className="text-right px-2 py-2 font-semibold">{titleB} run: seen</th><th className="text-right px-2 py-2 font-semibold">cited</th></tr>
-            </thead>
-            <tbody className="divide-y divide-border tabular-nums">
-              {langRows.map(r => (
-                <tr key={r.language}><td className="px-2 py-1.5 font-medium text-foreground">{r.language}</td>
-                  <td className="px-2 py-1.5 text-right">{r.englishSeen}</td><td className="px-2 py-1.5 text-right font-medium">{r.englishCited}</td>
-                  <td className="px-2 py-1.5 text-right">{r.nativeSeen}</td><td className="px-2 py-1.5 text-right font-medium">{r.nativeCited}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-3">Websites in each language: <b className="font-semibold text-foreground">cited</b> / seen (in results, opened or cited).</p>
+        <Table head={<><Th>Language</Th><Th right>English run</Th><Th right>{short} run</Th></>}>
+          {langRows.map(r => (
+            <tr key={r.language}><Td className="font-medium text-foreground whitespace-nowrap">{r.language}</Td>
+              <Td right className="whitespace-nowrap"><span className="font-semibold text-foreground">{r.englishCited}</span> <span className="text-muted-foreground">/ {r.englishSeen}</span></Td>
+              <Td right className="whitespace-nowrap"><span className="font-semibold text-foreground">{r.nativeCited}</span> <span className="text-muted-foreground">/ {r.nativeSeen}</span></Td></tr>
+          ))}
+        </Table>
       </div>
 
-      <div>
+      <div className="min-w-0">
         <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
           <div>
-            <h4 className="text-sm font-semibold text-foreground">Websites ({labels.length})</h4>
-            {!readOnly && <p className="text-xs text-muted-foreground mt-0.5">Type, country and language are suggested automatically. Correct any that are wrong and tick the ones you have checked{unchecked ? ` (${unchecked} left)` : ''}.</p>}
+            <h4 className="text-sm font-semibold text-foreground">Websites <span className="font-normal text-muted-foreground">· {labels.length}</span></h4>
+            {!readOnly && <p className="text-xs text-muted-foreground mt-0.5">Labels are suggested automatically. Fix any that are wrong, then tick <i>Checked</i>{unchecked ? ` · ${unchecked} left` : ''}.</p>}
           </div>
           <label className="inline-flex items-center gap-2 text-sm text-foreground"><input type="checkbox" checked={citedOnly} onChange={e => setCitedOnly(e.target.checked)} className="h-4 w-4" /> Cited only</label>
         </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="border-b border-border text-xs text-muted-foreground">
-              <tr><th className="text-left px-2 py-2 font-semibold">Website</th><th className="text-left px-2 py-2 font-semibold">English</th><th className="text-left px-2 py-2 font-semibold">{titleB}</th><th className="text-left px-2 py-2 font-semibold">Type</th><th className="text-left px-2 py-2 font-semibold">Country</th><th className="text-left px-2 py-2 font-semibold">Language</th>{!readOnly && <th className="text-left px-2 py-2 font-semibold">Checked</th>}</tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {rows.map(l => (
-                <tr key={l.domain} className={l.type === 'state_media' ? 'bg-amber-50' : ''}>
-                  <td className="px-2 py-1.5 whitespace-nowrap"><span className="font-medium text-foreground">{l.domain}</span>{l.note && <span className="block text-[11px] text-muted-foreground">{l.note}</span>}</td>
-                  <td className="px-2 py-1.5">{use(seenEn, citedEn, l.domain)}</td>
-                  <td className="px-2 py-1.5">{use(seenNa, citedNa, l.domain)}</td>
-                  <td className="px-2 py-1.5 min-w-[11rem]">{readOnly ? SOURCE_TYPE_LABELS[l.type] : (
-                    <select value={l.type} onChange={e => set(l.domain, { type: e.target.value as SourceType, confirmed: true })} className={input} aria-label={`Type of ${l.domain}`}>
-                      {SOURCE_TYPE_ORDER.map(t => <option key={t} value={t}>{SOURCE_TYPE_LABELS[t]}</option>)}
-                    </select>)}</td>
-                  <td className="px-2 py-1.5 w-36">{readOnly ? (l.country ?? '—') : <input value={l.country ?? ''} onChange={e => set(l.domain, { country: e.target.value || null, confirmed: true })} className={input} aria-label={`Country of ${l.domain}`} />}</td>
-                  <td className="px-2 py-1.5 w-32">{readOnly ? (l.language ?? '—') : <input value={l.language ?? ''} onChange={e => set(l.domain, { language: e.target.value || null, confirmed: true })} className={input} aria-label={`Language of ${l.domain}`} />}</td>
-                  {!readOnly && <td className="px-2 py-1.5"><input type="checkbox" checked={l.confirmed} onChange={e => set(l.domain, { confirmed: e.target.checked })} aria-label={`Label for ${l.domain} checked`} className="h-4 w-4" /></td>}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table head={<><Th>Website</Th><Th>English</Th><Th>{short}</Th><Th>Type</Th><Th>Country</Th><Th>Language</Th>{!readOnly && <Th>Checked</Th>}</>}>
+          {rows.map(l => (
+            <tr key={l.domain} className={l.type === 'state_media' ? 'bg-amber-50' : ''}>
+              <Td className="whitespace-nowrap"><span className="font-medium text-foreground">{l.domain}</span>{l.note && <span className="block text-[11px] text-muted-foreground whitespace-normal max-w-[16rem]">{l.note}</span>}</Td>
+              <Td>{use(seenEn, citedEn, l.domain)}</Td>
+              <Td>{use(seenNa, citedNa, l.domain)}</Td>
+              <Td className="min-w-[13rem]">{readOnly ? SOURCE_TYPE_LABELS[l.type] : (
+                <select value={l.type} onChange={e => set(l.domain, { type: e.target.value as SourceType, confirmed: true })} className={input} aria-label={`Type of ${l.domain}`}>
+                  {SOURCE_TYPE_ORDER.map(t => <option key={t} value={t}>{SOURCE_TYPE_LABELS[t]}</option>)}
+                </select>)}</Td>
+              <Td className="w-32">{readOnly ? (l.country ?? '—') : <input value={l.country ?? ''} onChange={e => set(l.domain, { country: e.target.value || null, confirmed: true })} className={input} aria-label={`Country of ${l.domain}`} />}</Td>
+              <Td className="w-28">{readOnly ? (l.language ?? '—') : <input value={l.language ?? ''} onChange={e => set(l.domain, { language: e.target.value || null, confirmed: true })} className={input} aria-label={`Language of ${l.domain}`} />}</Td>
+              {!readOnly && <Td className="text-center"><input type="checkbox" checked={l.confirmed} onChange={e => set(l.domain, { confirmed: e.target.checked })} aria-label={`Label for ${l.domain} checked`} className="h-4 w-4" /></Td>}
+            </tr>
+          ))}
+        </Table>
       </div>
     </div>
   );
 };
 
-/** Key comparisons for one run, as one compact row: English vs target. */
+/** Key comparisons for one run: one row per language. */
 const AtAGlance: React.FC<{ run: Pick<ResearchEvaluationRecord, 'english' | 'native' | 'sourceLabels' | 'queryLanguages' | 'titleB'> }> = ({ run }) => {
   const m = runMetrics(run as ResearchEvaluationRecord);
   const langs = sourceLanguageCounts([run]);
   const topCitedLang = (side: 'englishCited' | 'nativeCited') => {
     const total = langs.reduce((a, r) => a + r[side], 0);
     const top = [...langs].filter(r => r.language !== 'Unknown').sort((a, b) => b[side] - a[side])[0];
-    return total && top && top[side] ? `${top.language} ${Math.round((top[side] / total) * 100)}%` : '—';
+    return total && top && top[side] ? <>{top.language} <span className="text-muted-foreground">{Math.round((top[side] / total) * 100)}%</span></> : '—';
   };
-  const items: [string, string, string][] = [
-    ['Searches', String(m.english.searches), String(m.native.searches)],
-    ['Searched in the question’s language', pct(m.english.queriesInOwnLanguage), pct(m.native.queriesInOwnLanguage)],
-    ['Main language of cited sites', topCitedLang('englishCited'), topCitedLang('nativeCited')],
-    ['State-affiliated media cited', String(m.english.stateMediaCited), String(m.native.stateMediaCited)],
-  ];
+  const row = (label: string, s: 'english' | 'native') => {
+    const t = run[s], x = m[s];
+    return (
+      <tr>
+        <Td className="font-semibold text-foreground whitespace-nowrap">{label}</Td>
+        <Td right>{x.searches}</Td>
+        <Td right>{pct(x.queriesInOwnLanguage)}</Td>
+        <Td right>{pagesCited(t)}</Td>
+        <Td className="whitespace-nowrap">{topCitedLang(s === 'english' ? 'englishCited' : 'nativeCited')}</Td>
+        <Td right className={x.stateMediaCited ? 'font-semibold text-amber-800' : ''}>{x.stateMediaCited}</Td>
+        <Td right className="text-muted-foreground whitespace-nowrap">{[t.durationSeconds != null ? `${t.durationSeconds.toFixed(0)}s` : null, fmtCost(t.usage)].filter(Boolean).join(' · ') || '—'}</Td>
+      </tr>
+    );
+  };
   return (
-    <div className="rounded-xl border border-border bg-card">
-      <div className="grid grid-cols-2 md:grid-cols-5 divide-y md:divide-y-0 md:divide-x divide-border">
-        {items.map(([label, en, na]) => (
-          <div key={label} className="px-4 py-3">
-            <div className="text-xs text-muted-foreground leading-snug">{label}</div>
-            <div className="mt-1 text-sm tabular-nums"><span className="text-muted-foreground">EN</span> <span className="font-semibold text-foreground">{en}</span> <span className="text-muted-foreground ml-2">{shortName(run.titleB)}</span> <span className="font-semibold text-foreground">{na}</span></div>
-          </div>
-        ))}
-        <div className="px-4 py-3">
-          <div className="text-xs text-muted-foreground">Same websites cited</div>
-          <div className="mt-1 text-sm font-semibold text-foreground tabular-nums">{pct(m.citedOverlap)}</div>
-        </div>
+    <div className="bg-card rounded-xl border border-border overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-muted border-b border-border"><tr>
+            <Th>Run</Th><Th right>Searches</Th><Th right>In question’s language</Th><Th right>Pages cited</Th><Th>Main language cited</Th><Th right>State media cited</Th><Th right>Time · cost</Th>
+          </tr></thead>
+          <tbody className="divide-y divide-border">{row('English', 'english')}{row(run.titleB, 'native')}</tbody>
+        </table>
+      </div>
+      <div className="px-3 py-2 border-t border-border text-xs text-muted-foreground">
+        Websites cited in both languages: <span className="font-semibold text-foreground tabular-nums">{pct(m.citedOverlap)}</span>
+        <span className="mx-2">·</span>seen in both: <span className="font-semibold text-foreground tabular-nums">{pct(m.retrievedOverlap)}</span>
       </div>
     </div>
   );
@@ -305,29 +344,36 @@ const RunViewer: React.FC<{
   const idx = steps.findIndex(s => s.id === step);
   const next = steps[idx + 1];
   const unchecked = labels.filter(l => !l.confirmed).length;
+  const cardRef = useRef<HTMLDivElement>(null);
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <AtAGlance run={{ english, native, sourceLabels: labels, queryLanguages, titleB }} />
-      <nav aria-label="Review steps" className="flex flex-wrap gap-1 p-1 bg-muted rounded-lg w-fit">
-        {steps.map((s, i) => (
-          <button key={s.id} onClick={() => setStep(s.id)} aria-current={step === s.id ? 'step' : undefined}
-            className={`px-3.5 py-1.5 text-sm rounded-md transition-colors ${step === s.id ? 'bg-card shadow-sm text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}`}>
-            <span className="tabular-nums text-muted-foreground mr-1.5">{i + 1}</span>{s.label}
-            {s.id === 'sources' && !readOnly && unchecked > 0 && <span className="ml-1.5 text-[11px] text-amber-700">{unchecked} to check</span>}
-          </button>
-        ))}
-      </nav>
-      {busyNote}
-      <div className="bg-card border border-border rounded-xl p-5 sm:p-6">
-        {step === 'answers' && <TwoColumns left={<AnswerView trace={english} title="English" lang="en" labels={labels} />} right={<AnswerView trace={native} title={titleB} lang={langB} labels={labels} />} />}
-        {step === 'searches' && <TwoColumns left={<SearchesView trace={english} title="English" labels={labels} queryLanguages={queryLanguages.english} />} right={<SearchesView trace={native} title={titleB} labels={labels} queryLanguages={queryLanguages.native} />} />}
-        {step === 'sources' && <SourcesView english={english} native={native} labels={labels} titleB={titleB} readOnly={readOnly} onChange={onLabelsChange} />}
-        {step === 'score' && score}
-        {next && (
-          <div className="mt-6 pt-4 border-t border-border flex justify-end">
-            <button onClick={() => { setStep(next.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="px-4 py-2 text-sm font-medium rounded-lg border border-border bg-card hover:bg-muted">Next: {next.label} →</button>
-          </div>
-        )}
+      <div ref={cardRef} className="bg-card border border-border rounded-xl scroll-mt-4">
+        <nav aria-label="Review steps" className="flex flex-wrap gap-x-1 px-3 border-b border-border">
+          {steps.map((s, i) => {
+            const active = step === s.id;
+            return (
+              <button key={s.id} onClick={() => setStep(s.id)} aria-current={active ? 'step' : undefined}
+                className={`-mb-px inline-flex items-center gap-2 px-3 py-3 text-sm border-b-2 transition-colors ${active ? 'border-primary text-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
+                <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] tabular-nums ${active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{i + 1}</span>
+                {s.label}
+                {s.id === 'sources' && !readOnly && unchecked > 0 && <span className="text-[11px] rounded-full px-1.5 bg-amber-100 text-amber-800 tabular-nums">{unchecked}</span>}
+              </button>
+            );
+          })}
+        </nav>
+        {busyNote && <div className="px-5 pt-4">{busyNote}</div>}
+        <div className="p-5 sm:p-6">
+          {step === 'answers' && <TwoColumns left={<AnswerView trace={english} title="English" lang="en" labels={labels} />} right={<AnswerView trace={native} title={titleB} lang={langB} labels={labels} />} />}
+          {step === 'searches' && <TwoColumns left={<SearchesView trace={english} title="English" labels={labels} queryLanguages={queryLanguages.english} />} right={<SearchesView trace={native} title={titleB} labels={labels} queryLanguages={queryLanguages.native} />} />}
+          {step === 'sources' && <SourcesView english={english} native={native} labels={labels} titleB={titleB} readOnly={readOnly} onChange={onLabelsChange} />}
+          {step === 'score' && score}
+          {next && (
+            <div className="mt-6 pt-4 border-t border-border flex justify-end">
+              <button onClick={() => { setStep(next.id); cardRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }); }} className="px-4 py-2 text-sm font-medium rounded-lg border border-border bg-card hover:bg-muted">Next: {next.label} →</button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -355,7 +401,6 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
   const criteria = useEvaluationCriteria(`agentic:${evaluationName}`, { defaultCriteria: RESEARCH_CRITERIA, builtIns: false });
 
   const [view, setView] = useState<'runs' | 'dashboard'>('runs');
-  const [showSettings, setShowSettings] = useState(false);
   const [languageCode, setLanguageCode] = useState('');
   const [searchMode, setSearchMode] = useState<SearchMode>('native');
   const [maxSearches, setMaxSearches] = useState(3);
@@ -451,7 +496,7 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
     const en = questionEn.trim(), native = questionNative.trim();
     if (!en || !native || !languageCode) return;
     const machineUnchanged = !isManual && machine && machine.text.trim() === native;
-    setError(null); setIsRunning(true); setShowSettings(false); setRunKey(k => k + 1);
+    setError(null); setIsRunning(true); setRunKey(k => k + 1);
     setRun({ ...EMPTY_RUN, translationModel: machineUnchanged ? translationModel : MANUAL_TRANSLATION, translationUsage: machineUnchanged ? machine!.usage : null });
     seedScores();
     const side = async (question: string): Promise<ResearchTrace> => {
@@ -534,7 +579,8 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
   const ready = !!run.english && !!run.native && !isRunning;
   const canScore = ready && !run.english!.error && !run.native!.error;
 
-  const inputCls = 'w-full p-2.5 text-sm rounded-lg border border-border bg-card focus:outline-none focus:ring-2 focus:ring-ring';
+  const inputCls = 'w-full px-2.5 py-2 text-sm rounded-lg border border-border bg-card focus:outline-none focus:ring-2 focus:ring-ring disabled:bg-muted';
+  const fieldLabel = 'block text-xs font-medium text-muted-foreground mb-1';
   const primaryBtn = 'px-5 py-2.5 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:bg-primary-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors';
   const secondaryBtn = 'px-4 py-2 text-sm font-medium rounded-lg border border-border bg-card text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors';
 
@@ -591,66 +637,59 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
             {!isRunning && <button onClick={() => reset()} className={secondaryBtn}>{editing ? 'Cancel editing' : 'New question'}</button>}
           </section>
         ) : (
-          <section className="bg-card border border-border rounded-xl p-5 sm:p-6 space-y-5">
-            {/* Settings, folded into one line */}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-              <span className="text-muted-foreground">Model</span><span className="font-medium text-foreground">{getModelDisplayName(selectedModel)}</span>
-              <span className="text-muted-foreground">· Search</span><span className="font-medium text-foreground">{ENGINE_LABEL[engine]}{searchMode === 'otari' ? ' (same for all)' : ''}</span>
-              <span className="text-muted-foreground">· Source analysis</span><span className="font-medium text-foreground">{getModelDisplayName(analysisModel)}</span>
-              <button onClick={() => setShowSettings(s => !s)} aria-expanded={showSettings} className="ml-auto text-sm text-primary hover:underline">{showSettings ? 'Hide settings' : 'Change settings'}</button>
+          <section className="bg-card border border-border rounded-xl">
+            {/* Settings: always visible, compact */}
+            <div className="px-5 py-4 bg-muted border-b border-border rounded-t-xl">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-3">
+                <ModelSelector compact label="Model under evaluation" description="Searches the web and answers, in both languages." selectedModel={selectedModel} onModelChange={setSelectedModel} />
+                <div>
+                  <span className={fieldLabel}>Search</span>
+                  <div role="radiogroup" aria-label="Search engine" className="flex p-0.5 bg-card border border-border rounded-lg">
+                    {([['native', 'Model’s own'], ['otari', 'Same for all']] as const).map(([id, label]) => (
+                      <button key={id} type="button" role="radio" aria-checked={searchMode === id} onClick={() => setSearchMode(id)}
+                        title={id === 'native' ? 'As people experience it. Claude and OpenAI models use their own search; other models use Otari’s.' : 'Controlled: every model uses Otari’s search, so differences come from the model and the language.'}
+                        className={`flex-1 px-2 py-1.5 text-sm rounded-md transition-colors ${searchMode === id ? 'bg-primary text-primary-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}`}>{label}</button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1">Uses {ENGINE_LABEL[engine]}</p>
+                </div>
+                <div>
+                  <span className={fieldLabel}>Max searches per language</span>
+                  <div role="radiogroup" aria-label="Max searches" className="flex p-0.5 bg-card border border-border rounded-lg">
+                    {[1, 2, 3, 4, 5].map(n => (
+                      <button key={n} type="button" role="radio" aria-checked={maxSearches === n} onClick={() => setMaxSearches(n)}
+                        className={`flex-1 py-1.5 text-sm rounded-md tabular-nums transition-colors ${maxSearches === n ? 'bg-primary text-primary-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}`}>{n}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label htmlFor="rl-lang" className={fieldLabel}>Target language</label>
+                  <select id="rl-lang" value={languageCode} onChange={e => setLanguageCode(e.target.value)} className={inputCls}>
+                    <option value="">Choose a language…</option>
+                    {AVAILABLE_NATIVE_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
+                  </select>
+                </div>
+                <ModelSelector compact label="Translation" description="Translates the English question." selectedModel={translationModel} onModelChange={setTranslationModel}
+                  extraOption={{ id: MANUAL_TRANSLATION, name: 'Manual — I will write the translation myself' }} />
+                <ModelSelector compact label="Source analysis" description="Labels each website's type, country and language, and the language of each search." selectedModel={analysisModel} onModelChange={setAnalysisModel} />
+                <div className="sm:col-span-2">
+                  <label htmlFor="rl-ctx" className={fieldLabel}>Scenario <span className="font-normal">(optional)</span></label>
+                  <input id="rl-ctx" value={scenarioContext} onChange={e => setScenarioContext(e.target.value)} className={inputCls} placeholder="e.g. Asylum card renewal, Greece" />
+                </div>
+              </div>
             </div>
-            {showSettings && (
-              <div className="space-y-5 pt-4 border-t border-border">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                  <ModelSelector label="Model under evaluation" description="Searches the web and answers, in both languages." selectedModel={selectedModel} onModelChange={setSelectedModel} />
-                  <ModelSelector label="Translation model" description="Translates the English question." selectedModel={translationModel} onModelChange={setTranslationModel}
-                    extraOption={{ id: MANUAL_TRANSLATION, name: 'Manual — I will write the translation myself' }} />
-                  <ModelSelector label="Source analysis model" description="Labels each website's type, country and language, and the language of each search." selectedModel={analysisModel} onModelChange={setAnalysisModel} />
-                </div>
-                <div className="flex flex-wrap items-start gap-5">
-                  <div>
-                    <span className="block text-sm font-medium text-foreground mb-1.5">Search engine</span>
-                    <div role="radiogroup" className="inline-flex p-1 bg-muted rounded-lg">
-                      {([['native', 'Model’s own search'], ['otari', 'Same search for all']] as const).map(([id, label]) => (
-                        <button key={id} type="button" role="radio" aria-checked={searchMode === id} onClick={() => setSearchMode(id)}
-                          className={`px-3 py-1.5 text-sm rounded-md ${searchMode === id ? 'bg-card shadow-sm text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}`}>{label}</button>
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1.5 max-w-md">{searchMode === 'native'
-                      ? 'As people experience it. Claude and OpenAI models use their own search; other models use Otari’s.'
-                      : 'Controlled: every model uses Otari’s search, so differences come from the model and the language.'}</p>
-                  </div>
-                  <div>
-                    <label htmlFor="rl-max" className="block text-sm font-medium text-foreground mb-1.5">Max searches</label>
-                    <select id="rl-max" value={maxSearches} onChange={e => setMaxSearches(Number(e.target.value))} className={`${inputCls} w-24`}>
-                      {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
-                    </select>
-                  </div>
-                  <div className="flex-1 min-w-[14rem]">
-                    <label htmlFor="rl-ctx" className="block text-sm font-medium text-foreground mb-1.5">Scenario <span className="font-normal text-muted-foreground">(optional)</span></label>
-                    <input id="rl-ctx" value={scenarioContext} onChange={e => setScenarioContext(e.target.value)} className={inputCls} placeholder="e.g. Asylum card renewal, Greece" />
-                  </div>
-                </div>
-              </div>
-            )}
 
-            <div className="pt-4 border-t border-border space-y-4">
-              <div className="max-w-xs">
-                <label htmlFor="rl-lang" className="block text-sm font-medium text-foreground mb-1.5">Target language</label>
-                <select id="rl-lang" value={languageCode} onChange={e => setLanguageCode(e.target.value)} className={inputCls}>
-                  <option value="">Choose a language…</option>
-                  {AVAILABLE_NATIVE_LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
-                </select>
-              </div>
+            {/* The question */}
+            <div className="px-5 py-5 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label htmlFor="rl-q-en" className="block text-sm font-medium text-foreground mb-1.5">Question in English</label>
+                  <label htmlFor="rl-q-en" className={fieldLabel}>Question in English</label>
                   <textarea id="rl-q-en" rows={3} value={questionEn} onChange={e => setQuestionEn(e.target.value)} className={inputCls}
                     placeholder="e.g. My asylum card in Greece expires next week. How do I renew it?" />
                 </div>
                 <div>
-                  <label htmlFor="rl-q-native" className="block text-sm font-medium text-foreground mb-1.5">
-                    Question in {titleB} {isTranslating && <span className="font-normal inline-flex items-center gap-1 ml-1 text-muted-foreground"><LoadingSpinner size="sm" /> translating…</span>}
+                  <label htmlFor="rl-q-native" className={fieldLabel}>
+                    Question in {titleB} {isTranslating && <span className="font-normal inline-flex items-center gap-1 ml-1"><LoadingSpinner size="sm" /> translating…</span>}
                   </label>
                   <textarea id="rl-q-native" rows={3} value={questionNative} onChange={e => setQuestionNative(e.target.value)} lang={languageCode} dir="auto" disabled={!languageCode} className={inputCls}
                     placeholder={!languageCode ? 'Choose a target language first' : isManual ? `Write the ${titleB} version` : 'Filled in automatically. You can edit it.'} />
@@ -683,37 +722,51 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
         {/* Saved runs */}
         {!hasRun && !isRunning && (
           <section className="space-y-3 pt-2">
-            <h2 className="text-base font-semibold text-foreground">Saved runs</h2>
+            <h2 className="text-sm font-semibold text-foreground">Saved runs <span className="font-normal text-muted-foreground">· {records.length}</span></h2>
             {isLoadingRecords ? <LoadingSpinner size="md" /> : sorted.length === 0 ? (
               <p className="text-sm text-muted-foreground">None yet. Runs you score and save appear here.</p>
             ) : (
-              <ul className="divide-y divide-border bg-card border border-border rounded-xl">
-                {sorted.map(r => {
-                  const open = openId === r.id;
-                  return (
-                    <li key={r.id}>
-                      <button onClick={() => setOpenId(open ? null : r.id)} aria-expanded={open} className="w-full text-left px-5 py-3.5 flex flex-wrap items-center gap-x-4 gap-y-1 hover:bg-muted">
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium text-foreground truncate">{r.scenarioContext || r.english.question}</span>
-                          <span className="block text-xs text-muted-foreground mt-0.5">{r.titleB} · {getModelDisplayName(r.model)} · {r.searchMode === 'otari' ? 'same search for all' : 'own search'} · {new Date(r.timestamp).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
-                        </span>
-                        <svg viewBox="0 0 20 20" fill="currentColor" className={`w-4 h-4 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden="true"><path fillRule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.17 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clipRule="evenodd" /></svg>
-                      </button>
-                      {open && (
-                        <div className="px-5 pb-5 space-y-4">
-                          {r.notes && <p className="text-sm text-muted-foreground"><span className="font-medium text-foreground">Your notes:</span> {r.notes}</p>}
-                          <RunViewer english={r.english} native={r.native} labels={r.sourceLabels} queryLanguages={r.queryLanguages ?? { english: [], native: [] }} titleB={r.titleB} langB={r.languageCode} readOnly />
-                          <div className="flex flex-wrap justify-end items-center gap-4">
-                            {r.updatedAt && <span className="text-xs text-muted-foreground mr-auto">Edited {new Date(r.updatedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>}
-                            <button onClick={() => deleteRecord(r)} className="text-sm text-muted-foreground hover:text-destructive">Delete</button>
-                            <button onClick={() => startEdit(r)} className={secondaryBtn}>Edit labels and scores</button>
-                          </div>
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+              <div className="bg-card border border-border rounded-xl overflow-hidden">
+                <table className="min-w-full text-sm table-fixed">
+                  <thead className="bg-muted border-b border-border"><tr>
+                    <Th className="w-[46%]">Question</Th><Th>Language</Th><Th>Model</Th><Th>Search</Th><Th>Saved</Th><Th className="w-8"><span className="sr-only">Open</span></Th>
+                  </tr></thead>
+                  <tbody className="divide-y divide-border">
+                    {sorted.map(r => {
+                      const open = openId === r.id;
+                      return (
+                        <React.Fragment key={r.id}>
+                          <tr onClick={() => setOpenId(open ? null : r.id)} className={`cursor-pointer ${open ? 'bg-muted' : 'hover:bg-muted'}`}>
+                            <Td><button aria-expanded={open} className="block w-full text-left truncate font-medium text-foreground" title={r.english.question}>{r.scenarioContext || r.english.question}</button></Td>
+                            <Td className="truncate">{shortName(r.titleB)}</Td>
+                            <Td className="truncate">{getModelDisplayName(r.model)}</Td>
+                            <Td className="truncate text-muted-foreground">{r.searchMode === 'otari' ? 'Same for all' : 'Own'}</Td>
+                            <Td className="whitespace-nowrap text-muted-foreground tabular-nums">{new Date(r.timestamp).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</Td>
+                            <Td><svg viewBox="0 0 20 20" fill="currentColor" className={`w-4 h-4 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden="true"><path fillRule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.17 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clipRule="evenodd" /></svg></Td>
+                          </tr>
+                          {open && (
+                            <tr><td colSpan={6} className="px-4 py-4 bg-background space-y-4">
+                              <div className="flex flex-wrap items-start gap-3">
+                                <div className="min-w-0 flex-1 text-sm space-y-1">
+                                  <p className="text-foreground" dir="auto">{r.english.question}</p>
+                                  <p className="text-muted-foreground" dir="auto" lang={r.languageCode}>{r.native.question}</p>
+                                  {r.notes && <p className="text-muted-foreground"><span className="font-medium text-foreground">Your notes:</span> {r.notes}</p>}
+                                </div>
+                                <div className="flex items-center gap-4">
+                                  {r.updatedAt && <span className="text-xs text-muted-foreground">Edited {new Date(r.updatedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>}
+                                  <button onClick={() => deleteRecord(r)} className="text-sm text-muted-foreground hover:text-destructive">Delete</button>
+                                  <button onClick={() => startEdit(r)} className={secondaryBtn}>Edit labels and scores</button>
+                                </div>
+                              </div>
+                              <RunViewer english={r.english} native={r.native} labels={r.sourceLabels} queryLanguages={r.queryLanguages ?? { english: [], native: [] }} titleB={r.titleB} langB={r.languageCode} readOnly />
+                            </td></tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
         )}
