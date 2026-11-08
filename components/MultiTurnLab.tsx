@@ -17,6 +17,7 @@ import ModelSelector from './ModelSelector';
 import EvaluationForm from './EvaluationForm';
 import LoadingSpinner from './LoadingSpinner';
 import { ModeBadge } from './EvaluationModes';
+import MultiTurnDashboard from './MultiTurnDashboard';
 import { MANUAL_TRANSLATION, usePersistedModel, useEvaluationCriteria } from './labShared';
 
 /**
@@ -85,12 +86,12 @@ const SideCell: React.FC<{
       <div className="self-end max-w-[90%] rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-sm text-foreground whitespace-pre-wrap" lang={lang} dir="auto">
         {side.user}
       </div>
-      <div className="rounded-xl border border-border bg-card px-4 py-3" lang={lang} dir="auto">
+      <div className="rounded-xl border border-border bg-card px-4 py-3">
         {pending ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-2"><LoadingSpinner size="sm" /> Waiting for the model…</div>
         ) : (
           <>
-            <div className="prose prose-sm max-w-none text-card-foreground prose-p:my-1.5" dangerouslySetInnerHTML={md(side.assistant)} />
+            <div className="prose prose-sm max-w-none text-card-foreground prose-p:my-1.5" lang={lang} dir="auto" dangerouslySetInnerHTML={md(side.assistant)} />
             <div className="mt-3 pt-3 border-t border-border flex flex-wrap items-center justify-between gap-2">
               <FlagPicker value={side.flag} onChange={f => onFlag?.(f)} disabled={readOnly} label="Flag this reply" />
               <span className="text-[11px] text-muted-foreground tabular-nums">
@@ -203,6 +204,9 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
 
   // Scoring
   const [phase, setPhase] = useState<'conversation' | 'scoring'>('conversation');
+  // A saved conversation being edited (its flags, notes and scores; the messages stay as they were)
+  const [editing, setEditing] = useState<MultiTurnEvaluationRecord | null>(null);
+  const [view, setView] = useState<'conversations' | 'dashboard'>('conversations');
   const [scoresA, setScoresA] = useState<LanguageSpecificRubricScores>({ ...INITIAL_LANGUAGE_SPECIFIC_RUBRIC_SCORES });
   const [scoresB, setScoresB] = useState<LanguageSpecificRubricScores>({ ...INITIAL_LANGUAGE_SPECIFIC_RUBRIC_SCORES });
   const [disparity, setDisparity] = useState<HarmDisparityMetrics>({ ...INITIAL_HARM_DISPARITY_METRICS });
@@ -217,7 +221,8 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
 
   const language = AVAILABLE_NATIVE_LANGUAGES.find(l => l.code === languageCode);
   const titleA = 'English';
-  const titleB = language?.name ?? 'Target language';
+  const titleB = editing?.titleB ?? language?.name ?? 'Target language';
+  const langCode = editing?.languageCode ?? languageCode;
   const isManual = translationModel === MANUAL_TRANSLATION;
   const started = turns.length > 0 || !!pendingTurn;
   const atLimit = turns.length >= MAX_TURNS;
@@ -329,10 +334,22 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
     setTurns(prev => prev.map(t => (t.index === index ? { ...t, [side]: { ...t[side], ...patch } } : t)));
 
   const resetConversation = (ask = true) => {
-    if (ask && started && !window.confirm('Discard this conversation? It has not been saved.')) return;
+    if (ask && started && !window.confirm(editing ? 'Discard your changes to this conversation?' : 'Discard this conversation? It has not been saved.')) return;
     setTurns([]); turnsRef.current = []; setPendingTurn(null);
     setDraftEn(''); setDraftNative(''); setMachineDraft(null);
-    setPhase('conversation'); setError(null);
+    setPhase('conversation'); setError(null); setEditing(null);
+  };
+
+  const startEdit = (r: MultiTurnEvaluationRecord) => {
+    if (started && !window.confirm(editing ? 'Discard your changes to the conversation you are editing?' : 'Discard the conversation in progress? It has not been saved.')) return;
+    setEditing(r);
+    turnsRef.current = r.turns; setTurns(r.turns); setPendingTurn(null);
+    setScoresA(r.humanScores.english);
+    setScoresB(r.humanScores.native);
+    setDisparity({ custom_disparities: [], ...r.humanScores.disparity });
+    setNotes(r.notes ?? ''); setFlaggedForReview(!!r.isFlaggedForReview);
+    setPhase('scoring'); setView('conversations'); setOpenRecordId(null); setError(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const startScoring = () => {
@@ -347,17 +364,66 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
 
   const unflaggedCount = turns.reduce((n, t) => n + (t.english.flag ? 0 : 1) + (t.native.flag ? 0 : 1), 0);
 
+  /** Scores a saved conversation with the judge in the background and stores the result. */
+  const judgeInBackground = (saved: MultiTurnEvaluationRecord, judgeModelId: string) => {
+    (async () => {
+      let final: MultiTurnEvaluationRecord;
+      try {
+        const judged = await evaluateConversationWithLlm(saved, judgeModelId);
+        final = { ...saved, llmJudgeModel: judgeModelId, llmScores: judged.evaluation, judgeUsage: judged.usage, llmEvaluationStatus: 'completed', llmEvaluationError: undefined };
+      } catch (e) {
+        final = { ...saved, llmJudgeModel: judgeModelId, llmEvaluationStatus: 'failed', llmEvaluationError: e instanceof Error ? e.message : String(e) };
+      }
+      try {
+        await db.updateEvaluation(final);
+        setRecords(prev => prev.map(r => (r.id === final.id ? final : r)));
+      } catch (e) { console.error('Failed to store judge result:', e); }
+    })();
+  };
+
+  const retryJudge = (r: MultiTurnEvaluationRecord) => {
+    const pending = { ...r, llmEvaluationStatus: 'pending' as const, llmEvaluationError: undefined };
+    setRecords(prev => prev.map(x => (x.id === r.id ? pending : x)));
+    judgeInBackground(pending, r.llmJudgeModel || judgeModel);
+  };
+
+  const breakingPoints = (ts: ConversationTurn[]) => ({
+    firstUnsafeTurnEnglish: firstTurnWhere(ts, 'english', ['unsafe']),
+    firstUnsafeTurnNative: firstTurnWhere(ts, 'native', ['unsafe']),
+    firstConcernTurnEnglish: firstTurnWhere(ts, 'english', ['concerning', 'unsafe']),
+    firstConcernTurnNative: firstTurnWhere(ts, 'native', ['concerning', 'unsafe']),
+  });
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    // Messages and judge results are kept; flags, notes and human scores are replaced.
+    const updated: MultiTurnEvaluationRecord = {
+      ...editing, turns, ...breakingPoints(turns),
+      hiddenBuiltInKeys: criteria.hiddenBuiltInKeys,
+      humanScores: { english: scoresA, native: scoresB, disparity },
+      notes, isFlaggedForReview: flaggedForReview, updatedAt: new Date().toISOString(),
+    };
+    setIsSaving(true); setError(null);
+    try {
+      await db.updateEvaluation(updated);
+      setRecords(prev => prev.map(r => (r.id === updated.id ? updated : r)));
+      resetConversation(false);
+      setOpenRecordId(updated.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const save = async () => {
+    if (editing) return saveEdit();
     const record: MultiTurnEvaluationRecord = {
       id: '', timestamp: new Date().toISOString(), userEmail: currentUser.email,
       labType: 'multiturn', evaluationName,
       scenarioContext: scenarioContext.trim(), systemPrompt: systemPrompt.trim(), conversationStyle: style,
       languageCode, languagePair: `English - ${titleB}`, model: selectedModel, titleA, titleB,
-      turns,
-      firstUnsafeTurnEnglish: firstTurnWhere(turns, 'english', ['unsafe']),
-      firstUnsafeTurnNative: firstTurnWhere(turns, 'native', ['unsafe']),
-      firstConcernTurnEnglish: firstTurnWhere(turns, 'english', ['concerning', 'unsafe']),
-      firstConcernTurnNative: firstTurnWhere(turns, 'native', ['concerning', 'unsafe']),
+      turns, ...breakingPoints(turns),
       hiddenBuiltInKeys: criteria.hiddenBuiltInKeys,
       humanScores: { english: scoresA, native: scoresB, disparity },
       notes, isFlaggedForReview: flaggedForReview,
@@ -370,20 +436,7 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
       setRecords(prev => [saved, ...prev]);
       resetConversation(false);
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      // The judge scores the whole conversation in the background
-      (async () => {
-        let final: MultiTurnEvaluationRecord;
-        try {
-          const judged = await evaluateConversationWithLlm(saved, judgeModel);
-          final = { ...saved, llmScores: judged.evaluation, judgeUsage: judged.usage, llmEvaluationStatus: 'completed', llmEvaluationError: undefined };
-        } catch (e) {
-          final = { ...saved, llmEvaluationStatus: 'failed', llmEvaluationError: e instanceof Error ? e.message : String(e) };
-        }
-        try {
-          await db.updateEvaluation(final);
-          setRecords(prev => prev.map(r => (r.id === final.id ? final : r)));
-        } catch (e) { console.error('Failed to store judge result:', e); }
-      })();
+      judgeInBackground(saved, judgeModel); // the judge scores the whole conversation in the background
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -396,11 +449,12 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
     try {
       await db.deleteEvaluation(r.id);
       setRecords(prev => prev.filter(x => x.id !== r.id));
+      if (editing?.id === r.id) resetConversation(false);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
 
   const leave = () => {
-    if (started && !window.confirm('Leave this evaluation? The current conversation has not been saved.')) return;
+    if (started && !window.confirm(editing ? 'Leave this evaluation? Your changes have not been saved.' : 'Leave this evaluation? The current conversation has not been saved.')) return;
     onLeaveEvaluation();
   };
 
@@ -422,9 +476,34 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
         <button onClick={leave} className="text-sm text-primary hover:underline font-medium">Switch evaluation</button>
       </div>
 
+      <div role="tablist" aria-label="View" className="flex gap-6 border-b border-border -mt-4">
+        {([['conversations', 'Conversations'], ['dashboard', 'Dashboard']] as const).map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={view === id} onClick={() => setView(id)}
+            className={`-mb-px pb-2.5 text-sm font-medium border-b-2 transition-colors ${view === id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
+            {label}{id === 'conversations' && records.length > 0 && <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">{records.length}</span>}
+          </button>
+        ))}
+      </div>
+
+      {view === 'dashboard' ? (
+        isLoadingRecords ? <LoadingSpinner size="md" /> : <MultiTurnDashboard records={records} evaluationName={evaluationName} />
+      ) : (<>
+
       {error && <div role="alert" className="p-3 rounded-lg border border-red-300 bg-red-50 text-sm text-red-800 flex justify-between gap-3"><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss" className="font-semibold">×</button></div>}
 
-      {/* 1. Setup */}
+      {editing ? (
+        <section className="rounded-xl border border-primary bg-card p-5 sm:p-6 flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-1 min-w-0">
+            <h2 className="text-lg font-semibold text-foreground">Editing a saved conversation</h2>
+            <p className="text-sm text-muted-foreground">
+              {editing.scenarioContext || editing.languagePair} · {getModelDisplayName(editing.model)} · {editing.turns.length} turns · saved {new Date(editing.timestamp).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+            </p>
+            <p className="text-xs text-muted-foreground">You can change flags, notes and scores. The messages and the judge's scores stay as they were.</p>
+          </div>
+          <button onClick={() => resetConversation()} className={secondaryBtn}>Cancel editing</button>
+        </section>
+      ) : (
+      /* 1. Setup */
       <section className="bg-card border border-border rounded-xl p-5 sm:p-7 space-y-6">
         <div className="flex items-baseline justify-between gap-3">
           <h2 className="text-lg font-semibold text-foreground">1. Set up the conversation</h2>
@@ -506,12 +585,13 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
           </div>
         )}
       </section>
+      )}
 
       {/* 2. Conversation */}
       <section className="space-y-5">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <h2 className="text-lg font-semibold text-foreground">2. Conversation</h2>
-          {started && phase === 'conversation' && (
+          {started && phase === 'conversation' && !editing && (
             <button onClick={() => resetConversation()} className="text-sm text-muted-foreground hover:text-destructive">Start over</button>
           )}
         </div>
@@ -523,7 +603,7 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
             </div>
             <ol className="space-y-5">
               {turns.map(t => (
-                <TurnRow key={t.index} turn={t} titleA={titleA} titleB={titleB} langB={languageCode}
+                <TurnRow key={t.index} turn={t} titleA={titleA} titleB={titleB} langB={langCode}
                   onChange={(side, patch) => updateTurn(t.index, side, patch)} />
               ))}
               {pendingTurn && <TurnRow turn={pendingTurn} titleA={titleA} titleB={titleB} langB={languageCode} pending readOnly />}
@@ -538,7 +618,7 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
         )}
 
         {/* Composer (live) / runner (scripted) */}
-        {phase === 'conversation' && style === 'live' && (
+        {phase === 'conversation' && !editing && style === 'live' && (
           <div className="bg-card border border-border rounded-xl p-4 sm:p-5 space-y-3">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -569,7 +649,7 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
           </div>
         )}
 
-        {phase === 'conversation' && style === 'scripted' && (
+        {phase === 'conversation' && !editing && style === 'scripted' && (
           <div className="flex flex-wrap items-center justify-end gap-2">
             <span className="text-xs text-muted-foreground mr-auto">{remainingScript.length} scripted {remainingScript.length === 1 ? 'turn' : 'turns'} left</span>
             {turns.length > 0 && <button onClick={startScoring} disabled={isSending} className={secondaryBtn}>Finish and score</button>}
@@ -597,7 +677,7 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
             nativeScores={scoresB} onNativeScoresChange={setScoresB}
             harmDisparityMetrics={disparity} onHarmDisparityMetricsChange={setDisparity}
             overallNotes={notes} onOverallNotesChange={setNotes}
-            onSubmit={save} disabled={isSaving}
+            onSubmit={save} disabled={isSaving} isEditing={!!editing}
             isManuallyFlaggedForReview={flaggedForReview} onIsManuallyFlaggedForReviewChange={setFlaggedForReview}
             hiddenBuiltInKeys={criteria.hiddenBuiltInKeys} onToggleHiddenBuiltInKey={criteria.toggleHiddenBuiltInKey}
             onCriterionAddedToEvaluation={criteria.addCriterionToTemplate}
@@ -640,8 +720,11 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
                       <ol className="space-y-5">
                         {r.turns.map(t => <TurnRow key={t.index} turn={t} titleA={r.titleA} titleB={r.titleB} langB={r.languageCode} readOnly />)}
                       </ol>
-                      <div className="flex justify-end">
+                      <div className="flex flex-wrap justify-end items-center gap-4">
+                        {r.updatedAt && <span className="text-xs text-muted-foreground mr-auto">Edited {new Date(r.updatedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>}
+                        {r.llmEvaluationStatus === 'failed' && <button onClick={() => retryJudge(r)} className="text-sm text-primary hover:underline">Retry judge</button>}
                         <button onClick={() => deleteRecord(r)} className="text-sm text-muted-foreground hover:text-destructive">Delete</button>
+                        <button onClick={() => startEdit(r)} className={secondaryBtn}>Edit flags and scores</button>
                       </div>
                     </div>
                   )}
@@ -651,6 +734,7 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
           </ul>
         )}
       </section>
+      </>)}
     </div>
   );
 };

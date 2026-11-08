@@ -40,7 +40,8 @@ export interface ConversationTurn {
 
 export interface MultiTurnEvaluationRecord {
   id: string;
-  timestamp: string;
+  timestamp: string;              // when the conversation was first saved
+  updatedAt?: string;             // when its scores/flags were last edited
   userEmail: string;
   labType: 'multiturn';
   evaluationName: string;
