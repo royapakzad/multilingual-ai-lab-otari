@@ -181,7 +181,8 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
   const [workspace, setWorkspace] = useState<GatewayWorkspace | null>(null);
 
   // Rubric configuration, scoped to multi-turn so it never affects a single-prompt evaluation of the same name
-  const criteria = useEvaluationCriteria(`multi-turn:${evaluationName}`);
+  // Conversations are scored only on the evaluator's own criteria (no built-in rubric).
+  const criteria = useEvaluationCriteria(`multi-turn:${evaluationName}`, { builtIns: false });
 
   // Setup
   const [languageCode, setLanguageCode] = useState('');
@@ -683,6 +684,7 @@ const MultiTurnLab: React.FC<MultiTurnLabProps> = ({ currentUser, evaluationName
             onCriterionAddedToEvaluation={criteria.addCriterionToTemplate}
             onCriterionRemovedFromEvaluation={criteria.removeCriterionFromTemplate}
             unit="conversation"
+            builtInCriteria={false}
           />
         </section>
       )}

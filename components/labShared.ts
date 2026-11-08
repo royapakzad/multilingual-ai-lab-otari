@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { CustomCriterionScore } from '../types';
-import { HIDDEN_BUILT_IN_CRITERIA_KEY_PREFIX, CUSTOM_CRITERIA_TEMPLATE_KEY_PREFIX } from '../constants';
+import { HIDDEN_BUILT_IN_CRITERIA_KEY_PREFIX, CUSTOM_CRITERIA_TEMPLATE_KEY_PREFIX, ALL_BUILT_IN_KEYS } from '../constants';
 
 /** Translation-picker option meaning "no machine translation: the evaluator writes it". */
 export const MANUAL_TRANSLATION = 'manual';
@@ -36,7 +36,10 @@ export const usePersistedModel = (storageKey: string, fallback: string) => {
  * running template of custom criteria (defined once, carried into every new entry).
  * `scope` keeps different modes' evaluations apart even when they share a name.
  */
-export const useEvaluationCriteria = (scope: string, defaultCriteria: CustomCriterionScore[] = []) => {
+export const useEvaluationCriteria = (
+  scope: string,
+  { defaultCriteria = [], builtIns = true }: { defaultCriteria?: CustomCriterionScore[]; builtIns?: boolean } = {},
+) => {
   const hiddenKey = `${HIDDEN_BUILT_IN_CRITERIA_KEY_PREFIX}${scope}`;
   const templateKey = `${CUSTOM_CRITERIA_TEMPLATE_KEY_PREFIX}${scope}`;
   const [hiddenBuiltInKeys, setHidden] = useState<string[]>([]);
@@ -50,12 +53,13 @@ export const useEvaluationCriteria = (scope: string, defaultCriteria: CustomCrit
     try { stored = localStorage.getItem(templateKey); } catch { /* storage unavailable */ }
     const t = stored === null ? defaultCriteria : readJson<unknown>(templateKey, []);
     if (stored === null && defaultCriteria.length) writeJson(templateKey, defaultCriteria);
-    setHidden(Array.isArray(h) ? h : []);
+    // Modes without built-in criteria always hide all of them; nothing to toggle.
+    setHidden(builtIns ? (Array.isArray(h) ? h : []) : ALL_BUILT_IN_KEYS);
     setTemplate(Array.isArray(t) ? t : []);
   }, [hiddenKey, templateKey]);
 
   const toggleHiddenBuiltInKey = (key: string, hide: boolean) =>
-    setHidden(prev => {
+    builtIns && setHidden(prev => {
       const next = hide ? [...new Set([...prev, key])] : prev.filter(k => k !== key);
       writeJson(hiddenKey, next);
       return next;

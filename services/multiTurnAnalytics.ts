@@ -236,3 +236,30 @@ export const downloadCsv = (filename: string, csv: string) => {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
+
+/**
+ * Human vs judge on the evaluator's OWN criteria (custom_criteria), matched by criterion label.
+ * Option criteria: share of runs where the judge picked the same option as the human, per side.
+ * Slider criteria: the two averages. Only completed judge results.
+ */
+export const customCriteriaAgreement = <R extends Judged>(records: R[]) => {
+  const judged = records.filter(r => r.llmEvaluationStatus === 'completed' && r.llmScores);
+  const labels = Array.from(new Set(judged.flatMap(r => (r.humanScores.english.custom_criteria ?? []).map(c => c.label))));
+  return labels.map(label => {
+    const pairs = (side: 'english' | 'native') => judged.map(r => {
+      const h = (r.humanScores[side].custom_criteria ?? []).find(c => c.label === label);
+      const j = ((r.llmScores![side] as any).custom_criteria ?? []).find((c: any) => c.label === label);
+      return h && j ? { h: h.value, j: j.value, type: h.type } : null;
+    }).filter(<T,>(x: T | null): x is T => !!x);
+    const en = pairs('english'), na = pairs('native');
+    const isSlider = [...en, ...na].some(p => p.type === 'slider');
+    const agree = (ps: typeof en) => (ps.length ? ps.filter(p => String(p.h) === String(p.j)).length / ps.length : null);
+    const avg = (ps: typeof en, k: 'h' | 'j') => mean(ps.map(p => Number(p[k])).filter(Number.isFinite));
+    return {
+      label, isSlider, n: Math.max(en.length, na.length),
+      agreementEnglish: isSlider ? null : agree(en), agreementNative: isSlider ? null : agree(na),
+      humanEnglish: isSlider ? avg(en, 'h') : null, judgeEnglish: isSlider ? avg(en, 'j') : null,
+      humanNative: isSlider ? avg(na, 'h') : null, judgeNative: isSlider ? avg(na, 'j') : null,
+    };
+  }).filter(x => x.n > 0);
+};

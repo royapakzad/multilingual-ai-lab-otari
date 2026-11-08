@@ -2,9 +2,9 @@ import React, { useMemo, useState } from 'react';
 import { ResearchEvaluationRecord, SourceType } from '../types';
 import { getModelDisplayName, classifyModelLicense } from '../constants';
 import {
-  runMetrics, mean, citedDomains, labelFor, SOURCE_TYPE_LABELS, SOURCE_TYPE_ORDER, researchRunRows, researchSourceRows, Side,
+  runMetrics, mean, citedDomains, labelFor, SOURCE_TYPE_LABELS, SOURCE_TYPE_ORDER, researchRunRows, researchSourceRows, sourceLanguageCounts, Side,
 } from '../services/researchAnalytics';
-import { humanVsJudge, toCsv, downloadCsv } from '../services/multiTurnAnalytics';
+import { humanVsJudge, customCriteriaAgreement, toCsv, downloadCsv } from '../services/multiTurnAnalytics';
 
 /**
  * Dashboard for web-research runs: whether the agent searched in the question's language, how
@@ -47,20 +47,21 @@ const Table: React.FC<{ head: React.ReactNode; children: React.ReactNode }> = ({
 );
 
 /** Share of cited websites of each type, English vs target, as paired horizontal bars. */
-const SourceMix: React.FC<{ shares: { type: SourceType; english: number; native: number; nEnglish: number; nNative: number }[]; titleB: string }> = ({ shares, titleB }) => {
+type PairRow = { key: string; label: string; warn?: boolean; english: number; native: number; nEnglish: number; nNative: number };
+const PairedBars: React.FC<{ rows: PairRow[]; titleB: string; unit: string }> = ({ rows: shares, titleB, unit }) => {
   const max = Math.max(0.0001, ...shares.flatMap(s => [s.english, s.native]));
   return (
     <ul className="space-y-3">
       {shares.map(s => (
-        <li key={s.type} className="grid grid-cols-[minmax(0,12rem)_1fr] gap-3 items-center">
-          <span className={`text-sm ${s.type === 'state_media' ? 'text-amber-800 font-medium' : 'text-foreground'}`}>{s.type === 'state_media' && '⚠ '}{SOURCE_TYPE_LABELS[s.type]}</span>
+        <li key={s.key} className="grid grid-cols-[minmax(0,12rem)_1fr] gap-3 items-center">
+          <span className={`text-sm ${s.warn ? 'text-amber-800 font-medium' : 'text-foreground'}`}>{s.warn && '⚠ '}{s.label}</span>
           <span className="space-y-[2px]">
             {(['english', 'native'] as const).map(side => (
-              <span key={side} className="flex items-center gap-2" title={`${side === 'english' ? 'English' : titleB}: ${pct(s[side])} of cited websites (${side === 'english' ? s.nEnglish : s.nNative})`}>
+              <span key={side} className="flex items-center gap-2" title={`${side === 'english' ? 'English' : titleB}: ${pct(s[side])} of ${unit} (${side === 'english' ? s.nEnglish : s.nNative})`}>
                 <span className="flex-1 h-2.5 bg-muted rounded-[3px] overflow-hidden">
                   <span className="block h-full rounded-[3px]" style={{ width: `${(s[side] / max) * 100}%`, background: SERIES[side] }} />
                 </span>
-                <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{pct(s[side])}</span>
+                <span className="w-16 text-right text-xs tabular-nums text-muted-foreground">{pct(s[side])} <span className="opacity-70">({side === 'english' ? s.nEnglish : s.nNative})</span></span>
               </span>
             ))}
           </span>
@@ -98,8 +99,13 @@ const ResearchDashboard: React.FC<{ records: ResearchEvaluationRecord[]; evaluat
     };
     const ce = typeCounts('english'), cn = typeCounts('native');
     const te = Object.values(ce).reduce((a, b) => a + b, 0), tn = Object.values(cn).reduce((a, b) => a + b, 0);
-    const shares = SOURCE_TYPE_ORDER.map(t => ({ type: t, english: te ? ce[t] / te : 0, native: tn ? cn[t] / tn : 0, nEnglish: ce[t], nNative: cn[t] }))
+    const shares: PairRow[] = SOURCE_TYPE_ORDER.map(t => ({ key: t, label: SOURCE_TYPE_LABELS[t], warn: t === 'state_media', english: te ? ce[t] / te : 0, native: tn ? cn[t] / tn : 0, nEnglish: ce[t], nNative: cn[t] }))
       .filter(s => s.nEnglish || s.nNative);
+    // Languages of cited websites, per side
+    const langCounts = sourceLanguageCounts(filtered);
+    const le = langCounts.reduce((a, r) => a + r.englishCited, 0), ln = langCounts.reduce((a, r) => a + r.nativeCited, 0);
+    const langShares: PairRow[] = langCounts.filter(r => r.englishCited || r.nativeCited)
+      .map(r => ({ key: r.language, label: r.language, english: le ? r.englishCited / le : 0, native: ln ? r.nativeCited / ln : 0, nEnglish: r.englishCited, nNative: r.nativeCited }));
 
     const byModel = Array.from(new Set(filtered.map(r => r.model))).map(mid => {
       const rows = metrics.filter(x => x.r.model === mid);
@@ -125,10 +131,12 @@ const ResearchDashboard: React.FC<{ records: ResearchEvaluationRecord[]; evaluat
     return {
       english: side('english'), native: side('native'),
       retrievedOverlap: mean(metrics.map(x => x.m.retrievedOverlap)), citedOverlap: mean(metrics.map(x => x.m.citedOverlap)),
-      shares, byModel, topEnglish: topSites('english'), topNative: topSites('native'), totalCost,
+      shares, langShares, langCounts, byModel, topEnglish: topSites('english'), topNative: topSites('native'), totalCost,
     };
   }, [filtered]);
   const hvj = useMemo(() => humanVsJudge(filtered), [filtered]);
+  const cca = useMemo(() => customCriteriaAgreement(filtered), [filtered]);
+  const [showLangTable, setShowLangTable] = useState(false);
 
   const slug = evaluationName.replace(/[^\w-]+/g, '_').slice(0, 40) || 'evaluation';
   const stamp = new Date().toISOString().slice(0, 10);
@@ -163,10 +171,21 @@ const ResearchDashboard: React.FC<{ records: ResearchEvaluationRecord[]; evaluat
         <Card title="What kinds of sources were cited" subtitle="Share of cited websites of each type, per language. Each website counts once per run. Types come from the source labels (suggested, then checked by evaluators)."
           actions={<div className="flex items-center gap-4"><Key color={SERIES.english} label="English" /><Key color={SERIES.native} label={titleB} />
             <button onClick={() => setShowMixTable(s => !s)} className="text-xs text-primary hover:underline">{showMixTable ? 'Hide table' : 'Show as table'}</button></div>}>
-          {data.shares.length ? <SourceMix shares={data.shares} titleB={titleB} /> : <p className="text-sm text-muted-foreground">No cited sources yet.</p>}
+          {data.shares.length ? <PairedBars rows={data.shares} titleB={titleB} unit="cited websites" /> : <p className="text-sm text-muted-foreground">No cited sources yet.</p>}
           {showMixTable && (
             <div className="mt-4"><Table head={<><Th>Type</Th><Th right>English (websites)</Th><Th right>English share</Th><Th right>{titleB} (websites)</Th><Th right>{titleB} share</Th></>}>
-              {data.shares.map(s => <tr key={s.type}><Td strong>{SOURCE_TYPE_LABELS[s.type]}</Td><Td right>{s.nEnglish}</Td><Td right>{pct(s.english)}</Td><Td right>{s.nNative}</Td><Td right>{pct(s.native)}</Td></tr>)}
+              {data.shares.map(s => <tr key={s.key}><Td strong>{s.label}</Td><Td right>{s.nEnglish}</Td><Td right>{pct(s.english)}</Td><Td right>{s.nNative}</Td><Td right>{pct(s.native)}</Td></tr>)}
+            </Table></div>
+          )}
+        </Card>
+
+        <Card title="Languages of the sources" subtitle="Share and number of cited websites in each language, for English questions and for questions in the target language. The table also counts every website each run saw."
+          actions={<div className="flex items-center gap-4"><Key color={SERIES.english} label="English question" /><Key color={SERIES.native} label={`${titleB} question`} />
+            <button onClick={() => setShowLangTable(s => !s)} className="text-xs text-primary hover:underline">{showLangTable ? 'Hide table' : 'Show as table'}</button></div>}>
+          {data.langShares.length ? <PairedBars rows={data.langShares} titleB={titleB} unit="cited websites" /> : <p className="text-sm text-muted-foreground">No cited sources yet.</p>}
+          {showLangTable && (
+            <div className="mt-4"><Table head={<><Th>Website language</Th><Th right>English run: seen</Th><Th right>cited</Th><Th right>{titleB} run: seen</Th><Th right>cited</Th></>}>
+              {data.langCounts.map(r => <tr key={r.language}><Td strong>{r.language}</Td><Td right>{r.englishSeen}</Td><Td right>{r.englishCited}</Td><Td right>{r.nativeSeen}</Td><Td right>{r.nativeCited}</Td></tr>)}
             </Table></div>
           )}
         </Card>
@@ -198,13 +217,19 @@ const ResearchDashboard: React.FC<{ records: ResearchEvaluationRecord[]; evaluat
           ))}
         </div>
 
-        <Card title="Human vs LLM judge" subtitle="Averages over runs the judge has scored. 1–5 scales: higher is better. Categorical dimensions: share rated as having some harm.">
-          {hvj.length === 0 ? <p className="text-sm text-muted-foreground">No judge results yet.</p> : (
-            <Table head={<><Th>Dimension</Th><Th right>n</Th><Th right>Human EN</Th><Th right>Judge EN</Th><Th right>Human target</Th><Th right>Judge target</Th></>}>
-              {hvj.map(d => {
-                const f = (v: number | null) => (d.isSlider ? (v == null ? '—' : v.toFixed(2)) : pct(v));
-                return <tr key={d.key}><Td strong>{d.label}</Td><Td right>{d.n}</Td><Td right>{f(d.humanEnglish)}</Td><Td right>{f(d.judgeEnglish)}</Td><Td right>{f(d.humanNative)}</Td><Td right>{f(d.judgeNative)}</Td></tr>;
-              })}
+        <Card title="Human vs LLM judge" subtitle="On your criteria: how often the judge chose the same option as the evaluator (or both averages, for 1–5 scales). Only runs the judge has scored.">
+          {cca.length === 0 && hvj.length === 0 ? <p className="text-sm text-muted-foreground">No judge results yet.</p> : (
+            <Table head={<><Th>Criterion</Th><Th right>n</Th><Th right>Agreement EN</Th><Th right>Agreement target</Th></>}>
+              {cca.map(c => (
+                <tr key={c.label}><Td strong>{c.label}</Td><Td right>{c.n}</Td>
+                  <Td right>{c.isSlider ? `${n1(c.humanEnglish)} vs ${n1(c.judgeEnglish)}` : pct(c.agreementEnglish)}</Td>
+                  <Td right>{c.isSlider ? `${n1(c.humanNative)} vs ${n1(c.judgeNative)}` : pct(c.agreementNative)}</Td></tr>
+              ))}
+              {hvj.map(d => (
+                <tr key={d.key}><Td strong>{d.label} <span className="text-xs text-muted-foreground font-normal">(earlier built-in)</span></Td><Td right>{d.n}</Td>
+                  <Td right>{d.isSlider ? `${n1(d.humanEnglish)} vs ${n1(d.judgeEnglish)}` : `${pct(d.humanEnglish)} vs ${pct(d.judgeEnglish)}`}</Td>
+                  <Td right>{d.isSlider ? `${n1(d.humanNative)} vs ${n1(d.judgeNative)}` : `${pct(d.humanNative)} vs ${pct(d.judgeNative)}`}</Td></tr>
+              ))}
             </Table>
           )}
         </Card>

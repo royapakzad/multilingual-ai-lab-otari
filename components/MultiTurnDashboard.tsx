@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { MultiTurnEvaluationRecord } from '../types';
 import { getModelDisplayName, classifyModelLicense } from '../constants';
 import {
-  summarize, concernRateByTurn, groupBy, humanVsJudge, OUTCOME_LABELS, OUTCOME_ORDER,
+  summarize, concernRateByTurn, groupBy, humanVsJudge, customCriteriaAgreement, OUTCOME_LABELS, OUTCOME_ORDER,
   toCsv, conversationRows, turnRows, downloadCsv,
 } from '../services/multiTurnAnalytics';
 
@@ -168,6 +168,7 @@ const MultiTurnDashboard: React.FC<{ records: MultiTurnEvaluationRecord[]; evalu
   const byLanguage = useMemo(() => groupBy(filtered, r => r.titleB).map(([k, rs]) => ({ key: k, ...summarize(rs) })).sort((a, b) => b.n - a.n), [filtered]);
   const byModel = useMemo(() => groupBy(filtered, r => r.model).map(([k, rs]) => ({ key: k, ...summarize(rs) })).sort((a, b) => b.n - a.n), [filtered]);
   const hvj = useMemo(() => humanVsJudge(filtered), [filtered]);
+  const cca = useMemo(() => customCriteriaAgreement(filtered), [filtered]);
   const titleB = language || (languages.length === 1 ? languages[0] : 'Target language');
 
   const slug = evaluationName.replace(/[^\w-]+/g, '_').slice(0, 40) || 'evaluation';
@@ -260,16 +261,19 @@ const MultiTurnDashboard: React.FC<{ records: MultiTurnEvaluationRecord[]; evalu
           </Table>
         </Card>
 
-        <Card title="Human vs LLM judge" subtitle="Averages over conversations the judge has scored. 1–5 scales: higher is better. Categorical dimensions: share of conversations rated as having some harm.">
-          {hvj.length === 0 ? <p className="text-sm text-muted-foreground">No judge results yet.</p> : (
-            <Table head={<><Th>Dimension</Th><Th right>n</Th><Th right>Human EN</Th><Th right>Judge EN</Th><Th right>Human target</Th><Th right>Judge target</Th></>}>
-              {hvj.map(d => {
-                const f = (v: number | null) => (d.isSlider ? num(v, 2) : pct(v));
-                return (
-                  <tr key={d.key}><Td strong>{d.label}{!d.isSlider && <span className="text-xs text-muted-foreground font-normal"> · % with harm</span>}</Td><Td right>{d.n}</Td>
-                    <Td right>{f(d.humanEnglish)}</Td><Td right>{f(d.judgeEnglish)}</Td><Td right>{f(d.humanNative)}</Td><Td right>{f(d.judgeNative)}</Td></tr>
-                );
-              })}
+        <Card title="Human vs LLM judge" subtitle="On your own criteria: how often the judge chose the same option as the evaluator (or both averages, for 1–5 scales). Only conversations the judge has scored.">
+          {cca.length === 0 && hvj.length === 0 ? <p className="text-sm text-muted-foreground">No judge results on your criteria yet.</p> : (
+            <Table head={<><Th>Criterion</Th><Th right>n</Th><Th right>Agreement EN</Th><Th right>Agreement target</Th></>}>
+              {cca.map(c => (
+                <tr key={c.label}><Td strong>{c.label}</Td><Td right>{c.n}</Td>
+                  <Td right>{c.isSlider ? `${num(c.humanEnglish, 2)} vs ${num(c.judgeEnglish, 2)}` : pct(c.agreementEnglish)}</Td>
+                  <Td right>{c.isSlider ? `${num(c.humanNative, 2)} vs ${num(c.judgeNative, 2)}` : pct(c.agreementNative)}</Td></tr>
+              ))}
+              {hvj.map(d => (
+                <tr key={d.key}><Td strong>{d.label} <span className="text-xs text-muted-foreground font-normal">(earlier built-in)</span></Td><Td right>{d.n}</Td>
+                  <Td right>{d.isSlider ? `${num(d.humanEnglish, 2)} vs ${num(d.judgeEnglish, 2)}` : `${pct(d.humanEnglish)} vs ${pct(d.judgeEnglish)}`}</Td>
+                  <Td right>{d.isSlider ? `${num(d.humanNative, 2)} vs ${num(d.judgeNative, 2)}` : `${pct(d.humanNative)} vs ${pct(d.judgeNative)}`}</Td></tr>
+              ))}
             </Table>
           )}
         </Card>

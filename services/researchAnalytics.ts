@@ -120,6 +120,8 @@ export const researchRunRows = (records: ResearchEvaluationRecord[]) => records.
     [`${p}_cited_domains`]: citedDomains(r[s]).join(' | '), [`${p}_mean_rank_of_cited`]: m[s].meanCitedRank,
     [`${p}_cited_outside_results`]: m[s].citedOutsideResults, [`${p}_state_media_cited`]: m[s].stateMediaCited,
     [`${p}_cost_usd`]: m[s].cost, [`${p}_seconds`]: r[s].durationSeconds, [`${p}_answer`]: r[s].answer,
+    [`${p}_cited_source_languages`]: sourceLanguageCounts([r]).filter(x => (s === 'english' ? x.englishCited : x.nativeCited) > 0)
+      .map(x => `${x.language}: ${s === 'english' ? x.englishCited : x.nativeCited}`).join(' | '),
   });
   return {
     run_id: r.id, timestamp: r.timestamp, evaluator: r.userEmail, evaluation_name: r.evaluationName, scenario: r.scenarioContext,
@@ -159,3 +161,22 @@ export const researchSourceRows = (records: ResearchEvaluationRecord[]) => recor
   t.citations.forEach(c => { if (!rows.has(normUrl(c.url))) add(c.url, { search: '', query: '', rank: '', title: c.title, date: '' }); });
   return Array.from(rows.values());
 }));
+
+/**
+ * How many websites of each language each side saw and cited (each website counted once per
+ * side). Language comes from the source labels; unlabeled sites count as "Unknown".
+ */
+export const sourceLanguageCounts = (records: Pick<ResearchEvaluationRecord, 'english' | 'native' | 'sourceLabels'>[]) => {
+  const rows = new Map<string, { language: string; englishSeen: number; englishCited: number; nativeSeen: number; nativeCited: number }>();
+  const bump = (lang: string, key: 'englishSeen' | 'englishCited' | 'nativeSeen' | 'nativeCited') => {
+    const r = rows.get(lang) ?? { language: lang, englishSeen: 0, englishCited: 0, nativeSeen: 0, nativeCited: 0 };
+    r[key] += 1; rows.set(lang, r);
+  };
+  records.forEach(rec => (['english', 'native'] as Side[]).forEach(s => {
+    const lang = (d: string) => labelFor(rec.sourceLabels, d)?.language?.trim() || 'Unknown';
+    allDomains(rec[s]).forEach(d => bump(lang(d), s === 'english' ? 'englishSeen' : 'nativeSeen'));
+    citedDomains(rec[s]).forEach(d => bump(lang(d), s === 'english' ? 'englishCited' : 'nativeCited'));
+  }));
+  return Array.from(rows.values()).sort((a, b) =>
+    (a.language === 'Unknown' ? 1 : 0) - (b.language === 'Unknown' ? 1 : 0) || (b.englishSeen + b.nativeSeen) - (a.englishSeen + a.nativeSeen));
+};
