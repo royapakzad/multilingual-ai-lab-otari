@@ -22,7 +22,8 @@ export interface ModelDefinition {
 }
 
 /** Which of the lab's three LLM roles a call served. */
-export type LlmCallRole = 'evaluated' | 'translation' | 'judge';
+// 'analysis' = labelling sources/queries in web-research runs.
+export type LlmCallRole = 'evaluated' | 'translation' | 'judge' | 'analysis';
 
 /**
  * Per-call usage reported by the Otari gateway (api/llm.ts), stored on each evaluation record.

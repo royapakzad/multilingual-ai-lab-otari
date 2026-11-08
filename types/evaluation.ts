@@ -2,7 +2,7 @@
 
 import { LLMModelType } from './models';
 import { ReasoningEvaluationRecord } from './reasoning';
-import { MultiTurnEvaluationRecord } from './modes';
+import { MultiTurnEvaluationRecord, ResearchEvaluationRecord } from './modes';
 
 /**
  * Represents the entities automatically extracted from an LLM's response.
@@ -153,4 +153,4 @@ export interface MultilingualEvaluationRecord {
  * A union type for all possible evaluation records from any lab.
  * The `labType` field is a discriminator.
  */
-export type EvaluationRecord = MultilingualEvaluationRecord | ReasoningEvaluationRecord | MultiTurnEvaluationRecord;
+export type EvaluationRecord = MultilingualEvaluationRecord | ReasoningEvaluationRecord | MultiTurnEvaluationRecord | ResearchEvaluationRecord;

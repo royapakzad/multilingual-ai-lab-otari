@@ -11,7 +11,7 @@ export type EvaluationMode = 'single-turn' | 'multi-turn' | 'voice' | 'agentic';
 
 /** Which mode a stored record belongs to, from its labType. */
 export const modeOfLabType = (labType: string): EvaluationMode | null =>
-  labType === 'reasoning' ? 'single-turn' : labType === 'multiturn' ? 'multi-turn' : null;
+  labType === 'reasoning' ? 'single-turn' : labType === 'multiturn' ? 'multi-turn' : labType === 'research' ? 'agentic' : null;
 
 // --- Multi-turn -------------------------------------------------------------------------------
 
@@ -72,6 +72,88 @@ export interface MultiTurnEvaluationRecord {
   notes: string;
   isFlaggedForReview?: boolean;
 
+  orgId?: string | null;
+  workspaceLabel?: string | null;
+
+  llmJudgeModel?: string;
+  llmScores?: LlmEvaluation;
+  judgeUsage?: LlmCallUsage | null;
+  llmEvaluationStatus: 'not_started' | 'pending' | 'completed' | 'failed';
+  llmEvaluationError?: string;
+}
+
+// --- Web research agent -----------------------------------------------------------------------
+
+/** Whose search engine a run used: the model provider's own, or Otari's (Tavily). */
+export type SearchEngine = 'anthropic' | 'openai' | 'otari';
+/** 'native' = each model's own search where it has one (as users experience it); 'otari' = the same engine for all. */
+export type SearchMode = 'native' | 'otari';
+
+export interface ResearchResult { url: string; title: string; date: string | null; rank: number }
+export interface ResearchSearch { index: number; query: string; results: ResearchResult[] }
+export interface ResearchCitation { url: string; title: string; quote: string }
+
+/** Everything one side (English or target language) of a research run did. */
+export interface ResearchTrace {
+  question: string;
+  answer: string;
+  engine: SearchEngine;
+  searches: ResearchSearch[];
+  opened: string[];               // pages the agent read in full
+  citations: ResearchCitation[];  // sources the answer cites
+  usage: LlmCallUsage | null;
+  durationSeconds: number | null;
+  error?: string | null;
+}
+
+export type SourceType =
+  | 'government' | 'intergovernmental' | 'ngo' | 'news' | 'state_media' | 'academic'
+  | 'reference' | 'commercial' | 'forum_social' | 'other';
+
+/** What kind of source a website is. Suggested by the analysis model; confirmed or corrected by the evaluator. */
+export interface SourceLabel {
+  domain: string;
+  type: SourceType;
+  country: string | null;     // ISO country or region the source is from, e.g. "GR", "UK", "International"
+  language: string | null;    // main language of the site
+  note: string;
+  confirmed: boolean;         // the evaluator checked this label
+}
+
+export interface ResearchEvaluationRecord {
+  id: string;
+  timestamp: string;
+  updatedAt?: string;
+  userEmail: string;
+  labType: 'research';
+  evaluationName: string;
+
+  scenarioContext: string;
+  languageCode: string;
+  languagePair: string;
+  model: string;
+  searchMode: SearchMode;
+  maxSearches: number;
+  titleA: string;
+  titleB: string;
+  translationModel: string | null;   // or 'manual'
+  translationUsage: LlmCallUsage | null;
+
+  english: ResearchTrace;
+  native: ResearchTrace;
+  sourceLabels: SourceLabel[];       // one per domain seen on either side (an array: domains contain dots)
+  queryLanguages: { english: (string | null)[]; native: (string | null)[] };  // language of each search query
+  analysisModel?: string | null;
+  analysisUsage?: LlmCallUsage | null;
+
+  hiddenBuiltInKeys?: string[];
+  humanScores: {
+    english: LanguageSpecificRubricScores;
+    native: LanguageSpecificRubricScores;
+    disparity: HarmDisparityMetrics;
+  };
+  notes: string;
+  isFlaggedForReview?: boolean;
   orgId?: string | null;
   workspaceLabel?: string | null;
 
