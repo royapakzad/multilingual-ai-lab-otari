@@ -9,7 +9,7 @@ import {
   INITIAL_LANGUAGE_SPECIFIC_RUBRIC_SCORES, INITIAL_HARM_DISPARITY_METRICS, AVAILABLE_NATIVE_LANGUAGES,
   DEFAULT_EVALUATED_MODEL, DEFAULT_TRANSLATION_MODEL, DEFAULT_JUDGE_MODEL, getModelDisplayName,
 } from '../constants';
-import { runWebResearch, translateText, analyzeResearchSources, evaluateResearchWithLlm, fetchGatewayWorkspace } from '../services/llmService';
+import { runWebResearch, translateText, analyzeResearchSources, fetchGatewayWorkspace } from '../services/llmService';
 import {
   SOURCE_TYPE_LABELS, SOURCE_TYPE_ORDER, domainOf, normUrl, allDomains, citedDomains, labelFor, runMetrics, sourceLanguageCounts,
 } from '../services/researchAnalytics';
@@ -348,7 +348,8 @@ const EMPTY_RUN: RunState = { english: null, native: null, labels: [], queryLang
 const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, onLeaveEvaluation }) => {
   const [selectedModel, setSelectedModel] = usePersistedModel('mlal.model.evaluated', DEFAULT_EVALUATED_MODEL);
   const [translationModel, setTranslationModel] = usePersistedModel('mlal.model.translation', DEFAULT_TRANSLATION_MODEL);
-  const [judgeModel, setJudgeModel] = usePersistedModel('mlal.model.judge', DEFAULT_JUDGE_MODEL);
+  // Labels each website (type, country, language) and names each query's language. No judge in this mode.
+  const [analysisModel, setAnalysisModel] = usePersistedModel('mlal.model.analysis', DEFAULT_JUDGE_MODEL);
   const [workspace, setWorkspace] = useState<GatewayWorkspace | null>(null);
   // Scored on the research criteria and the evaluator's own (no built-in rubric).
   const criteria = useEvaluationCriteria(`agentic:${evaluationName}`, { defaultCriteria: RESEARCH_CRITERIA, builtIns: false });
@@ -439,7 +440,7 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
     if (!domains.length) return;
     setIsAnalyzing(true);
     try {
-      const res = await analyzeResearchSources(domains, { english: english?.searches.map(s => s.query) ?? [], native: native?.searches.map(s => s.query) ?? [] }, judgeModel);
+      const res = await analyzeResearchSources(domains, { english: english?.searches.map(s => s.query) ?? [], native: native?.searches.map(s => s.query) ?? [] }, analysisModel);
       setRun(r => ({ ...r, labels: res.labels, queryLanguages: res.queryLanguages, analysisUsage: res.usage, analysisError: null }));
     } catch (e) {
       setRun(r => ({ ...r, labels: domains.map(d => ({ domain: d.domain, type: 'other', country: null, language: null, note: '', confirmed: false })), analysisError: e instanceof Error ? e.message : String(e) }));
@@ -484,26 +485,6 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const judgeInBackground = (saved: ResearchEvaluationRecord, judgeId: string) => {
-    (async () => {
-      let final: ResearchEvaluationRecord;
-      try {
-        const j = await evaluateResearchWithLlm(saved, judgeId);
-        final = { ...saved, llmJudgeModel: judgeId, llmScores: j.evaluation, judgeUsage: j.usage, llmEvaluationStatus: 'completed', llmEvaluationError: undefined };
-      } catch (e) {
-        final = { ...saved, llmJudgeModel: judgeId, llmEvaluationStatus: 'failed', llmEvaluationError: e instanceof Error ? e.message : String(e) };
-      }
-      try { await db.updateEvaluation(final); setRecords(p => p.map(x => (x.id === final.id ? final : x))); }
-      catch (e) { console.error('Failed to store judge result:', e); }
-    })();
-  };
-
-  const retryJudge = (r: ResearchEvaluationRecord) => {
-    const pending = { ...r, llmEvaluationStatus: 'pending' as const, llmEvaluationError: undefined };
-    setRecords(p => p.map(x => (x.id === r.id ? pending : x)));
-    judgeInBackground(pending, r.llmJudgeModel || judgeModel);
-  };
-
   const save = async () => {
     if (!run.english || !run.native) return;
     setIsSaving(true); setError(null);
@@ -523,16 +504,15 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
         scenarioContext: scenarioContext.trim(), languageCode, languagePair: `English - ${titleB}`, model: selectedModel,
         searchMode, maxSearches, titleA: 'English', titleB, translationModel: run.translationModel, translationUsage: run.translationUsage,
         english: run.english, native: run.native, sourceLabels: run.labels, queryLanguages: run.queryLanguages,
-        analysisModel: judgeModel, analysisUsage: run.analysisUsage,
+        analysisModel, analysisUsage: run.analysisUsage,
         hiddenBuiltInKeys: criteria.hiddenBuiltInKeys, humanScores: { english: scoresA, native: scoresB, disparity },
         notes, isFlaggedForReview: flagged, orgId: workspace?.orgId ?? null, workspaceLabel: workspace?.label ?? null,
-        llmJudgeModel: judgeModel, judgeUsage: null, llmEvaluationStatus: 'pending',
+        llmEvaluationStatus: 'not_started',
       };
       const saved = await db.addEvaluation(record) as ResearchEvaluationRecord;
       setRecords(p => [saved, ...p]);
       reset(false); setQuestionEn(''); setQuestionNative(''); setMachine(null);
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      judgeInBackground(saved, judgeModel);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setIsSaving(false); }
@@ -560,7 +540,7 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
 
   const scoreStep = canScore ? (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">Score each answer together with how it was researched. After you save, the judge ({getModelDisplayName(judgeModel)}) sees both research trails and scores them the same way.</p>
+      <p className="text-sm text-muted-foreground">Score each answer together with how it was researched.</p>
       <EvaluationForm
         titleA="English" titleB={titleB}
         englishScores={scoresA} onEnglishScoresChange={setScoresA}
@@ -616,7 +596,7 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
               <span className="text-muted-foreground">Model</span><span className="font-medium text-foreground">{getModelDisplayName(selectedModel)}</span>
               <span className="text-muted-foreground">· Search</span><span className="font-medium text-foreground">{ENGINE_LABEL[engine]}{searchMode === 'otari' ? ' (same for all)' : ''}</span>
-              <span className="text-muted-foreground">· Judge</span><span className="font-medium text-foreground">{getModelDisplayName(judgeModel)}</span>
+              <span className="text-muted-foreground">· Source analysis</span><span className="font-medium text-foreground">{getModelDisplayName(analysisModel)}</span>
               <button onClick={() => setShowSettings(s => !s)} aria-expanded={showSettings} className="ml-auto text-sm text-primary hover:underline">{showSettings ? 'Hide settings' : 'Change settings'}</button>
             </div>
             {showSettings && (
@@ -625,7 +605,7 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
                   <ModelSelector label="Model under evaluation" description="Searches the web and answers, in both languages." selectedModel={selectedModel} onModelChange={setSelectedModel} />
                   <ModelSelector label="Translation model" description="Translates the English question." selectedModel={translationModel} onModelChange={setTranslationModel}
                     extraOption={{ id: MANUAL_TRANSLATION, name: 'Manual — I will write the translation myself' }} />
-                  <ModelSelector label="LLM-as-a-judge model" description="Labels sources and scores both runs." selectedModel={judgeModel} onModelChange={setJudgeModel} />
+                  <ModelSelector label="Source analysis model" description="Labels each website's type, country and language, and the language of each search." selectedModel={analysisModel} onModelChange={setAnalysisModel} />
                 </div>
                 <div className="flex flex-wrap items-start gap-5">
                   <div>
@@ -717,22 +697,14 @@ const ResearchLab: React.FC<ResearchLabProps> = ({ currentUser, evaluationName, 
                           <span className="block text-sm font-medium text-foreground truncate">{r.scenarioContext || r.english.question}</span>
                           <span className="block text-xs text-muted-foreground mt-0.5">{r.titleB} · {getModelDisplayName(r.model)} · {r.searchMode === 'otari' ? 'same search for all' : 'own search'} · {new Date(r.timestamp).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
                         </span>
-                        <span className={`text-xs ${r.llmEvaluationStatus === 'failed' ? 'text-red-700' : 'text-muted-foreground'}`}>Judge: {r.llmEvaluationStatus === 'completed' ? 'done' : r.llmEvaluationStatus === 'failed' ? 'failed' : 'running…'}</span>
                         <svg viewBox="0 0 20 20" fill="currentColor" className={`w-4 h-4 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden="true"><path fillRule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.17 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clipRule="evenodd" /></svg>
                       </button>
                       {open && (
                         <div className="px-5 pb-5 space-y-4">
-                          {r.llmEvaluationStatus === 'failed' && <p className="text-xs text-red-700">Judge error: {r.llmEvaluationError}</p>}
-                          {(r.llmScores?.notes || r.notes) && (
-                            <div className="text-sm text-muted-foreground space-y-1">
-                              {r.llmScores?.notes && <p><span className="font-medium text-foreground">Judge:</span> {r.llmScores.notes}</p>}
-                              {r.notes && <p><span className="font-medium text-foreground">Your notes:</span> {r.notes}</p>}
-                            </div>
-                          )}
+                          {r.notes && <p className="text-sm text-muted-foreground"><span className="font-medium text-foreground">Your notes:</span> {r.notes}</p>}
                           <RunViewer english={r.english} native={r.native} labels={r.sourceLabels} queryLanguages={r.queryLanguages ?? { english: [], native: [] }} titleB={r.titleB} langB={r.languageCode} readOnly />
                           <div className="flex flex-wrap justify-end items-center gap-4">
                             {r.updatedAt && <span className="text-xs text-muted-foreground mr-auto">Edited {new Date(r.updatedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>}
-                            {r.llmEvaluationStatus === 'failed' && <button onClick={() => retryJudge(r)} className="text-sm text-primary hover:underline">Retry judge</button>}
                             <button onClick={() => deleteRecord(r)} className="text-sm text-muted-foreground hover:text-destructive">Delete</button>
                             <button onClick={() => startEdit(r)} className={secondaryBtn}>Edit labels and scores</button>
                           </div>

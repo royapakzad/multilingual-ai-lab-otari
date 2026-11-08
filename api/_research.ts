@@ -172,7 +172,7 @@ export const runResearch = async (baseUrl: string, apiKey: string, body: any): P
     path = '/chat/completions';
     headers = { Authorization: `Bearer ${apiKey}` };
     payload = { model, max_tokens: 2000, messages: [{ role: 'user', content: question }],
-      tools: [{ type: 'otari_web_search', max_uses: maxUses }, { type: 'otari_web_fetch', max_uses: maxUses }] };
+      tools: [{ type: 'otari_web_search', max_uses: maxUses }, { type: 'otari_web_fetch' }] };
   }
 
   const started = Date.now();

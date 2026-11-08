@@ -129,9 +129,8 @@ export const researchRunRows = (records: ResearchEvaluationRecord[]) => records.
     translation: r.translationModel ?? '',
     retrieved_domain_overlap: m.retrievedOverlap, cited_domain_overlap: m.citedOverlap,
     ...side('english', 'english'), ...side('target', 'native'),
-    judge_model: r.llmJudgeModel ?? '', judge_status: r.llmEvaluationStatus, judge_notes: r.llmScores?.notes ?? '', human_notes: r.notes,
+    analysis_model: r.analysisModel ?? '', human_notes: r.notes,
     ...scoreCols('human_english', r.humanScores?.english, r), ...scoreCols('human_target', r.humanScores?.native, r),
-    ...scoreCols('judge_english', r.llmScores?.english, r), ...scoreCols('judge_target', r.llmScores?.native, r),
   };
 });
 
