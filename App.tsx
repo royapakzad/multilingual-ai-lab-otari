@@ -101,7 +101,7 @@ const App: React.FC = () => {
       />
 
       {evaluation ? (
-        <main className="flex-grow container mx-auto p-4 sm:p-6 md:p-8" aria-live="polite">
+        <main className="flex-grow w-full max-w-[96rem] mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8" aria-live="polite">
           {/* Each mode has its own lab, so features of one mode never affect another. */}
           {evaluation.mode === 'multi-turn' ? (
             <MultiTurnLab currentUser={currentUser} evaluationName={evaluation.name} onLeaveEvaluation={leaveEvaluation} />
